@@ -18,15 +18,16 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMembers,
   ],
 });
 
-client.once('ready', () => {
+client.once('clientReady', () => {
   console.log(`✅ ArkBot is online as ${client.user.tag}`);
 });
 
+// Forward messages from #ark-general
 client.on('messageCreate', async (message) => {
-  // Only watch #ark-general, ignore bots
   if (message.channel.id !== ARK_GENERAL_CHANNEL_ID) return;
   if (message.author.bot) return;
 
@@ -40,6 +41,7 @@ client.on('messageCreate', async (message) => {
         'x-webhook-secret': WEBHOOK_SECRET || '',
       },
       body: JSON.stringify({
+        type: 'message',
         id: message.id,
         channel_id: message.channel.id,
         content: message.content,
@@ -56,6 +58,36 @@ client.on('messageCreate', async (message) => {
     console.log(`✅ Webhook response:`, result);
   } catch (err) {
     console.error('Failed to forward message to webhook:', err.message);
+  }
+});
+
+// Forward new member joins
+client.on('guildMemberAdd', async (member) => {
+  console.log(`👋 New member joined: ${member.user.username}`);
+
+  try {
+    const response = await fetch(WEBHOOK_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-webhook-secret': WEBHOOK_SECRET || '',
+      },
+      body: JSON.stringify({
+        type: 'member_join',
+        user: {
+          id: member.user.id,
+          username: member.user.username,
+          global_name: member.user.globalName,
+        },
+        guild_id: member.guild.id,
+        joined_at: member.joinedAt,
+      }),
+    });
+
+    const result = await response.json();
+    console.log(`✅ Member join webhook response:`, result);
+  } catch (err) {
+    console.error('Failed to forward member join to webhook:', err.message);
   }
 });
 
