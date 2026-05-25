@@ -1,0 +1,62 @@
+{
+  "type": "object",
+  "properties": {
+    "player_name": {
+      "type": "string"
+    },
+    "discord_channel_id": {
+      "type": "string"
+    },
+    "raw_message": {
+      "type": "string"
+    },
+    "issue_type": {
+      "type": "string",
+      "enum": [
+        "Stuck",
+        "Lost Dino",
+        "Glitch",
+        "Hacker Report",
+        "Server Issue",
+        "General Support",
+        "Unknown"
+      ]
+    },
+    "ai_summary": {
+      "type": "string"
+    },
+    "key_details": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "Open",
+        "In Progress",
+        "Awaiting Admin",
+        "Resolved",
+        "Closed"
+      ],
+      "default": "Open"
+    },
+    "admin_notified": {
+      "type": "boolean",
+      "default": false
+    },
+    "intake_stage": {
+      "type": "string",
+      "enum": [
+        "greeting",
+        "collecting",
+        "ready_for_admin",
+        "closed"
+      ],
+      "default": "greeting"
+    },
+    "collected_data": {
+      "type": "string"
+    }
+  },
+  "required": [],
+  "name": "SupportTicket"
+}
