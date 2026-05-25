@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Skii's Lodge — Support Ticket Tracker</title>
+  <style>
+    :root {
+      --bg: #0e1117;
+      --surface: #161b22;
+      --surface2: #1f2937;
+      --border: #30363d;
+      --accent: #4ade80;
+      --accent2: #60a5fa;
+      --warn: #fbbf24;
+      --danger: #f87171;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --radius: 10px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; min-height: 100vh; }
+
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+    header .logo { font-size: 28px; }
+    header h1 { font-size: 18px; font-weight: 700; color: var(--accent); }
+    header p { font-size: 13px; color: var(--muted); margin-top: 2px; }
+    .header-right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+    .live-badge {
+      background: rgba(74,222,128,0.15);
+      border: 1px solid var(--accent);
+      color: var(--accent);
+      font-size: 11px;
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 20px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .live-dot { width: 7px; height: 7px; background: var(--accent); border-radius: 50%; animation: pulse 1.5s infinite; }
+    @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.3; } }
+
+    .toolbar {
+      padding: 16px 24px;
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+    .filter-btn {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      padding: 6px 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+      transition: all 0.15s;
+    }
+    .filter-btn:hover, .filter-btn.active { background: var(--accent2); border-color: var(--accent2); color: #fff; }
+    .filter-btn.danger.active { background: var(--danger); border-color: var(--danger); }
+    .filter-btn.warn.active { background: var(--warn); border-color: var(--warn); color: #000; }
+    .filter-btn.green.active { background: var(--accent); border-color: var(--accent); color: #000; }
+    .search-box {
+      margin-left: auto;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 13px;
+      width: 220px;
+    }
+    .search-box:focus { outline: none; border-color: var(--accent2); }
+    .refresh-btn {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      padding: 6px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    .refresh-btn:hover { color: var(--text); border-color: var(--text); }
+
+    .stats-bar {
+      display: flex;
+      gap: 16px;
+      padding: 14px 24px;
+      border-bottom: 1px solid var(--border);
+    }
+    .stat {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 10px 18px;
+      text-align: center;
+      min-width: 90px;
+    }
+    .stat .num { font-size: 22px; font-weight: 700; }
+    .stat .label { font-size: 11px; color: var(--muted); margin-top: 2px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .stat.open .num { color: var(--warn); }
+    .stat.admin .num { color: var(--danger); }
+    .stat.resolved .num { color: var(--accent); }
+    .stat.total .num { color: var(--accent2); }
+
+    .tickets { padding: 20px 24px; display: flex; flex-direction: column; gap: 12px; }
+    .empty { text-align: center; padding: 60px; color: var(--muted); }
+    .empty .icon { font-size: 48px; margin-bottom: 12px; }
+
+    .ticket-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 18px;
+      transition: border-color 0.15s;
+      cursor: pointer;
+    }
+    .ticket-card:hover { border-color: var(--accent2); }
+    .ticket-card.escalated { border-left: 3px solid var(--danger); }
+    .ticket-card.awaiting { border-left: 3px solid var(--warn); }
+    .ticket-card.resolved { border-left: 3px solid var(--accent); opacity: 0.7; }
+
+    .ticket-header { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+    .ticket-player { font-weight: 700; font-size: 15px; }
+    .badge {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 3px 9px;
+      border-radius: 20px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .badge-type-stuck      { background: rgba(251,191,36,0.15); color: var(--warn); border: 1px solid var(--warn); }
+    .badge-type-lost-dino  { background: rgba(96,165,250,0.15); color: var(--accent2); border: 1px solid var(--accent2); }
+    .badge-type-glitch     { background: rgba(167,139,250,0.15); color: #a78bfa; border: 1px solid #a78bfa; }
+    .badge-type-hacker     { background: rgba(248,113,113,0.15); color: var(--danger); border: 1px solid var(--danger); }
+    .badge-type-server     { background: rgba(251,146,60,0.15); color: #fb923c; border: 1px solid #fb923c; }
+    .badge-type-general    { background: rgba(74,222,128,0.15); color: var(--accent); border: 1px solid var(--accent); }
+
+    .badge-status-open            { background: rgba(251,191,36,0.15); color: var(--warn); }
+    .badge-status-awaiting-admin  { background: rgba(248,113,113,0.15); color: var(--danger); }
+    .badge-status-in-progress     { background: rgba(96,165,250,0.15); color: var(--accent2); }
+    .badge-status-resolved        { background: rgba(74,222,128,0.15); color: var(--accent); }
+    .badge-status-closed          { background: rgba(139,148,158,0.15); color: var(--muted); }
+
+    .ticket-time { margin-left: auto; font-size: 12px; color: var(--muted); }
+    .ticket-summary { font-size: 13px; color: var(--muted); line-height: 1.5; margin-bottom: 10px; }
+    .ticket-details {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 12px;
+    }
+    .detail-pill {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      padding: 3px 10px;
+      border-radius: 20px;
+    }
+
+    .ticket-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .action-btn {
+      font-size: 12px;
+      padding: 5px 12px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--surface2);
+      color: var(--text);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .action-btn:hover { border-color: var(--accent2); color: var(--accent2); }
+    .action-btn.claim { border-color: var(--accent2); color: var(--accent2); }
+    .action-btn.resolve { border-color: var(--accent); color: var(--accent); }
+    .action-btn.close { border-color: var(--muted); color: var(--muted); }
+    .action-btn.reopen { border-color: var(--warn); color: var(--warn); }
+
+    .raw-msg {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px 14px;
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 10px;
+      display: none;
+      white-space: pre-wrap;
+      line-height: 1.6;
+    }
+    .ticket-card.expanded .raw-msg { display: block; }
+
+    .loading { text-align: center; padding: 40px; color: var(--muted); font-size: 14px; }
+
+    @media (max-width: 600px) {
+      .stats-bar { flex-wrap: wrap; }
+      .toolbar { flex-direction: column; align-items: flex-start; }
+      .search-box { width: 100%; margin-left: 0; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo">🦕</div>
+  <div>
+    <h1>Skii's Lodge — Support Tickets</h1>
+    <p>Helena Intake System · Admin Dashboard</p>
+  </div>
+  <div class="header-right">
+    <div class="live-badge"><span class="live-dot"></span> Live</div>
+  </div>
+</header>
+
+<div class="toolbar">
+  <button class="filter-btn active" data-filter="all">All</button>
+  <button class="filter-btn warn" data-filter="Open">Open</button>
+  <button class="filter-btn danger" data-filter="Awaiting Admin">Needs Admin</button>
+  <button class="filter-btn" data-filter="In Progress">In Progress</button>
+  <button class="filter-btn green" data-filter="Resolved">Resolved</button>
+  <button class="filter-btn" data-filter="Closed">Closed</button>
+  <button class="refresh-btn" onclick="loadTickets()">↻ Refresh</button>
+  <input class="search-box" type="text" placeholder="Search player, issue, details..." oninput="filterTickets()" id="search" />
+</div>
+
+<div class="stats-bar" id="stats"></div>
+
+<div class="tickets" id="tickets">
+  <div class="loading">Loading tickets...</div>
+</div>
+
+<script>
+  const TICKET_API = 'https://ark-bot-c08a387c.base44.app/functions/ticketManager';
+  let allTickets = [];
+  let activeFilter = 'all';
+
+  const TYPE_LABELS = {
+    'Stuck': 'badge-type-stuck',
+    'Lost Dino': 'badge-type-lost-dino',
+    'Glitch': 'badge-type-glitch',
+    'Hacker Report': 'badge-type-hacker',
+    'Server Issue': 'badge-type-server',
+    'General Support': 'badge-type-general',
+    'Unknown': 'badge-type-general',
+  };
+
+  const STATUS_LABELS = {
+    'Open': 'badge-status-open',
+    'Awaiting Admin': 'badge-status-awaiting-admin',
+    'In Progress': 'badge-status-in-progress',
+    'Resolved': 'badge-status-resolved',
+    'Closed': 'badge-status-closed',
+  };
+
+  function timeAgo(dateStr) {
+    const diff = Date.now() - new Date(dateStr).getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return 'just now';
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    return `${Math.floor(hrs / 24)}d ago`;
+  }
+
+  function cardClass(t) {
+    if (t.status === 'Awaiting Admin') return 'ticket-card escalated';
+    if (t.status === 'Open') return 'ticket-card awaiting';
+    if (t.status === 'Resolved' || t.status === 'Closed') return 'ticket-card resolved';
+    return 'ticket-card';
+  }
+
+  function renderDetails(kd) {
+    if (!kd || kd === 'None provided') return '';
+    return kd.split('|').map(d => `<span class="detail-pill">${d.trim()}</span>`).join('');
+  }
+
+  function renderActions(t) {
+    const btns = [];
+    if (t.status === 'Open' || t.status === 'Awaiting Admin')
+      btns.push(`<button class="action-btn claim" onclick="updateTicket('${t.id}','In Progress',event)">🙋 Claim</button>`);
+    if (t.status !== 'Resolved' && t.status !== 'Closed')
+      btns.push(`<button class="action-btn resolve" onclick="updateTicket('${t.id}','Resolved',event)">✅ Resolve</button>`);
+    if (t.status !== 'Closed')
+      btns.push(`<button class="action-btn close" onclick="updateTicket('${t.id}','Closed',event)">🔒 Close</button>`);
+    if (t.status === 'Resolved' || t.status === 'Closed')
+      btns.push(`<button class="action-btn reopen" onclick="updateTicket('${t.id}','Open',event)">🔄 Reopen</button>`);
+    btns.push(`<button class="action-btn" onclick="toggleRaw('${t.id}',event)">📋 Raw</button>`);
+    return btns.join('');
+  }
+
+  function renderTicket(t) {
+    const typeClass = TYPE_LABELS[t.issue_type] || 'badge-type-general';
+    const statusClass = STATUS_LABELS[t.status] || 'badge-status-open';
+    const summary = t.ai_summary
+      ? t.ai_summary.replace(/\*\*/g, '').replace(/Issue Type:[^\n]*/,'').replace(/Summary:/,'').replace(/Key Details:[^\n]*/,'').trim().substring(0, 180)
+      : (t.raw_message || '').substring(0, 180);
+    const rawText = t.collected_data || t.raw_message || 'No data collected.';
+
+    return `
+      <div class="${cardClass(t)}" id="card-${t.id}" onclick="toggleExpand('${t.id}')">
+        <div class="ticket-header">
+          <span class="ticket-player">@${t.player_name || 'Unknown'}</span>
+          <span class="badge ${typeClass}">${t.issue_type || 'Unknown'}</span>
+          <span class="badge ${statusClass}">${t.status || 'Open'}</span>
+          <span class="ticket-time">${timeAgo(t.created_date)}</span>
+        </div>
+        <div class="ticket-summary">${summary || 'No summary available.'}</div>
+        ${t.key_details && t.key_details !== 'None provided' ? `<div class="ticket-details">${renderDetails(t.key_details)}</div>` : ''}
+        <div class="ticket-actions" onclick="event.stopPropagation()">
+          ${renderActions(t)}
+        </div>
+        <div class="raw-msg" id="raw-${t.id}">${rawText}</div>
+      </div>
+    `;
+  }
+
+  function renderStats(tickets) {
+    const open = tickets.filter(t => t.status === 'Open').length;
+    const admin = tickets.filter(t => t.status === 'Awaiting Admin').length;
+    const inprog = tickets.filter(t => t.status === 'In Progress').length;
+    const resolved = tickets.filter(t => t.status === 'Resolved' || t.status === 'Closed').length;
+    document.getElementById('stats').innerHTML = `
+      <div class="stat total"><div class="num">${tickets.length}</div><div class="label">Total</div></div>
+      <div class="stat open"><div class="num">${open}</div><div class="label">Open</div></div>
+      <div class="stat admin"><div class="num">${admin}</div><div class="label">Needs Admin</div></div>
+      <div class="stat"><div class="num" style="color:#60a5fa">${inprog}</div><div class="label">In Progress</div></div>
+      <div class="stat resolved"><div class="num">${resolved}</div><div class="label">Resolved</div></div>
+    `;
+  }
+
+  function filterTickets() {
+    const search = document.getElementById('search').value.toLowerCase();
+    let filtered = allTickets;
+    if (activeFilter !== 'all') filtered = filtered.filter(t => t.status === activeFilter);
+    if (search) filtered = filtered.filter(t =>
+      (t.player_name||'').toLowerCase().includes(search) ||
+      (t.issue_type||'').toLowerCase().includes(search) ||
+      (t.key_details||'').toLowerCase().includes(search) ||
+      (t.ai_summary||'').toLowerCase().includes(search) ||
+      (t.raw_message||'').toLowerCase().includes(search)
+    );
+    const el = document.getElementById('tickets');
+    if (filtered.length === 0) {
+      el.innerHTML = `<div class="empty"><div class="icon">🦕</div><div>No tickets found</div></div>`;
+    } else {
+      el.innerHTML = filtered.map(renderTicket).join('');
+    }
+  }
+
+  async function loadTickets() {
+    try {
+      const resp = await fetch(TICKET_API);
+      const data = await resp.json();
+      allTickets = Array.isArray(data) ? data : (data.items || []);
+      allTickets.sort((a, b) => {
+        // Sort: Awaiting Admin first, then Open, then others
+        const priority = { 'Awaiting Admin': 0, 'Open': 1, 'In Progress': 2, 'Resolved': 3, 'Closed': 4 };
+        const pa = priority[a.status] ?? 5;
+        const pb = priority[b.status] ?? 5;
+        if (pa !== pb) return pa - pb;
+        return new Date(b.created_date).getTime() - new Date(a.created_date).getTime();
+      });
+      renderStats(allTickets);
+      filterTickets();
+    } catch (e) {
+      document.getElementById('tickets').innerHTML = `<div class="empty"><div class="icon">⚠️</div><div>Failed to load tickets: ${e.message}</div></div>`;
+    }
+  }
+
+  async function updateTicket(id, newStatus, e) {
+    e.stopPropagation();
+    try {
+      await fetch(`${TICKET_API}?id=${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: newStatus }),
+      });
+      await loadTickets();
+    } catch(err) { alert('Failed to update ticket: ' + err.message); }
+  }
+
+  function toggleExpand(id) {
+    document.getElementById(`card-${id}`)?.classList.toggle('expanded');
+  }
+  function toggleRaw(id, e) {
+    e.stopPropagation();
+    document.getElementById(`raw-${id}`)?.parentElement.classList.toggle('expanded');
+  }
+
+  // Filter buttons
+  document.querySelectorAll('.filter-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      activeFilter = btn.dataset.filter;
+      filterTickets();
+    });
+  });
+
+  // Auto-refresh every 30 seconds
+  loadTickets();
+  setInterval(loadTickets, 30000);
+</script>
+</body>
+</html>
