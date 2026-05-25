@@ -1,0 +1,13 @@
+{
+  "name": "arkbot-discord",
+  "version": "1.0.0",
+  "description": "ArkBot Discord Gateway listener for Skii's Lodge",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.15.3",
+    "node-fetch": "^2.7.0"
+  }
+}
