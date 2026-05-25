@@ -276,11 +276,11 @@ async function handleTicketMessage(message) {
 
 // ── Handle trigger channel — any message creates a ticket ────────────────────
 async function handleTriggerChannel(message) {
+  // Delete immediately — don't await, fire and forget so it's instant
+  deleteMessage(message.channel.id, message.id).catch(() => {});
+
   const userId = message.author.id;
   const username = message.author.globalName || message.author.username;
-
-  // Delete their message to keep the channel clean
-  try { await deleteMessage(message.channel.id, message.id); } catch (_) {}
 
   // Check for existing open ticket
   for (const [, t] of activeTickets) {
