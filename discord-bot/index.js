@@ -10,16 +10,18 @@ const WEBHOOK_SECRET = process.env.DISCORD_WEBHOOK_SECRET;
 const GUILD_ID                   = '636832636752625664';
 const OPEN_TICKETS_CATEGORY_ID   = '1390284215870033971';
 const ADMIN_LOGS_CHANNEL_ID      = '1275132184440868866';
-const ARK_GENERAL_CHANNEL_ID     = '1173768088089534596';
+const ARK_GENERAL_CHANNEL_ID     = '1173768088089534596'; // BLACKLISTED — bot ignores this entirely
+const AI_CHANNEL_ID              = '1509173477725175928'; // #ai — only channel Helena responds in
 const STAFF_CHAT_CHANNEL_ID      = '1276128810609152030';
 const ADMIN_STUFF_CHANNEL_ID     = '1274810759485980704';
 const SUPPORT_TRIGGER_CHANNEL_ID = '1390284806650331146';
+const AI_PREFIX                  = '!ai';
 const ADMIN_ROLE_ID              = '1242319080760467557';
 const ARK_ADMIN_ROLE_ID          = '1242319323145166868';
 const BOT_USER_ID                = '1507730299356708984';
 const EVERYONE_ROLE_ID           = GUILD_ID; // @everyone role ID == Guild ID in Discord
 
-const PUBLIC_CHANNELS = [ARK_GENERAL_CHANNEL_ID, ADMIN_STUFF_CHANNEL_ID];
+const PUBLIC_CHANNELS = [AI_CHANNEL_ID]; // Only #ai is whitelisted
 
 // In-memory ticket state: channelId -> { userId, username, stage, collectedData, issueType }
 const activeTickets = new Map();
@@ -375,15 +377,18 @@ client.on('messageCreate', async (message) => {
     return;
   }
 
-  // Public channels → forward to webhook
-  if (PUBLIC_CHANNELS.includes(channelId)) {
-    console.log(`📨 [#${message.channel.name}] ${message.author.username}: "${message.content.substring(0, 80)}"`);
+  // #ai channel — ONLY respond to messages starting with !ai prefix
+  if (channelId === AI_CHANNEL_ID) {
+    const trimmed = message.content.trim();
+    if (!trimmed.toLowerCase().startsWith(AI_PREFIX)) return; // Ignore anything without !ai
+    const query = trimmed.slice(AI_PREFIX.length).trim();
+    console.log(`📨 [#ai] ${message.author.username}: "${query.substring(0, 80)}"`);
     await forwardToWebhook({
       type: 'message',
       id: message.id,
       channel_id: channelId,
       channel_name: message.channel.name,
-      content: message.content,
+      content: query, // Strip the prefix before forwarding
       author: {
         id: message.author.id,
         username: message.author.username,
@@ -391,7 +396,11 @@ client.on('messageCreate', async (message) => {
         bot: false,
       },
     });
+    return;
   }
+
+  // #ark-general and all other channels — BLACKLISTED, bot is completely silent
+  // No logging, no responding, no nothing.
 });
 
 // ── Member join ───────────────────────────────────────────────────────────────
