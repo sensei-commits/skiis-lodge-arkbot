@@ -1,598 +1,203 @@
 const {
-  Client, GatewayIntentBits, PermissionFlagsBits, ChannelType,
-  EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
-  StringSelectMenuBuilder, Partials,
-} = require('discord.js');
-const Anthropic = require('@anthropic-ai/sdk');
-const fetch     = require('node-fetch');
-const http      = require('http');
+  Client,
+  GatewayIntentBits,
+  PermissionFlagsBits,
+  ChannelType,
+  EmbedBuilder,
+  REST,
+  Routes,
+  ApplicationCommandOptionType,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  StringSelectMenuBuilder,
+  AttachmentBuilder,
+  Partials,
+} = require("discord.js");
+const Anthropic = require("@anthropic-ai/sdk");
+const fetch     = require("node-fetch");
+const http      = require("http");
 
-// ── Secrets (Railway env vars) ────────────────────────────────────────────────
-const DISCORD_BOT_TOKEN     = process.env.DISCORD_BOT_TOKEN;
-const WEBHOOK_URL           = process.env.ARKBOT_WEBHOOK_URL;
-const WEBHOOK_SECRET        = process.env.DISCORD_WEBHOOK_SECRET;
-const ANTHROPIC_API_KEY     = process.env.ANTHROPIC_API_KEY;
-const BATTLEMETRICS_API_KEY = process.env.BATTLEMETRICS_API_KEY || '';
-const BATTLEMETRICS_ORG_ID  = process.env.BATTLEMETRICS_ORG_ID  || '';
+// RCON — run: npm install rcon-client
+let Rcon;
+try { Rcon = require("rcon-client").Rcon; }
+catch { console.warn("[RCON] rcon-client not installed — actions logged only."); }
 
-// ── IDs ───────────────────────────────────────────────────────────────────────
-const GUILD_ID                   = '636832636752625664';
-const OPEN_TICKETS_CATEGORY_ID   = '1390284215870033971';
-const ADMIN_LOGS_CHANNEL_ID      = '1275132184440868866';
-const AI_CHANNEL_ID              = '1509816601334124614'; // #🤖︱ai
-const SUPPORT_TRIGGER_CHANNEL_ID = '1509816628542570609'; // #🎫︱support-ticket // #🎫︱support-ticket
-const ROLES_CHANNEL_ID           = '1509816508291878972'; // #🎭︱get-roles
-const ADMIN_CONSOLE_CHANNEL_ID   = '1509762780192837675'; // #🛠️・admin-console
-const STAFF_CHAT_CHANNEL_ID      = '1509816635765293067'; // #🦑︱staff-chat
-const POLLS_CHANNEL_ID           = '1509816572322250852'; // #🗳️︱ark-polls
-const ADMIN_ROLE_ID              = '703389459747700807';  // Admin ⭐
-const ARK_ADMIN_ROLE_ID          = '703397175538876428';  // ARK Admin's⭐
-const BOT_USER_ID                = '1507730299356708984';
+// ============================================================
+//  CONFIG
+// ============================================================
 
-// ── Channel name constants (used for name-based lookups) ──────────────────────
-const SUPPORT_TICKET_CHANNEL_NAME = 'support-ticket';
-const ROLES_CHANNEL_NAME          = 'get-roles';
-const ADMIN_CONSOLE_CHANNEL_NAME  = 'admin-console';
-const STAFF_CHAT_CHANNEL_NAME     = 'staff-chat';
-const POLLS_CHANNEL_NAME          = 'ark-polls';
-const ADMIN_ROLE_NAME             = 'Admin ⭐';
+const DISCORD_TOKEN     = process.env.DISCORD_BOT_TOKEN;
+const CLIENT_ID         = process.env.DISCORD_CLIENT_ID || "1507730299356708984";
+const GUILD_ID          = "636832636752625664";
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+const WEBHOOK_URL       = process.env.ARKBOT_WEBHOOK_URL;
+const WEBHOOK_SECRET    = process.env.DISCORD_WEBHOOK_SECRET;
 
-// ── Colors ────────────────────────────────────────────────────────────────────
-const COLORS = {
-  orange: 0xFF6B1A,
-  blue:   0x1A8CFF,
-  purple: 0x7B2FBE,
-  white:  0xF5F0E8,
-  green:  0x2ECC71,
-  red:    0xE74C3C,
-  yellow: 0xF1C40F,
+const UPDATE_INTERVAL_MINUTES = 5;
+
+// ── Role IDs ──────────────────────────────────────────────────
+const ROLES = {
+  admin:   "703389459747700807",   // Admin ⭐
+  staff:   "1276494265593102357",  // Moderator (closest to staff)
+  donator: null,                   // Set if/when you create a donator role
 };
 
-// ── Cluster data (mutable via admin actions) ──────────────────────────────────
-let MAPS = [
-  { name: 'The Island',     emoji: '🏝️' },
-  { name: 'The Center',     emoji: '🌀' },
-  { name: 'Scorched Earth', emoji: '🏜️' },
-  { name: 'Forglar',        emoji: '🌊' },
-  { name: 'Aberration',     emoji: '🌑' },
-  { name: 'Club Ark',       emoji: '🎉' },
-  { name: 'Svartlfheim',    emoji: '❄️' },
-  { name: 'Astraeos',       emoji: '🌌' },
-  { name: 'Extinction',     emoji: '☄️' },
-  { name: 'Volcano',        emoji: '🔥' },
-  { name: 'Valguero',       emoji: '🦕' },
-  { name: 'Lost Colony',    emoji: '🚀' },
+// ── Channel IDs ───────────────────────────────────────────────
+const CHANNEL_IDS = {
+  ai:               "1509816601334124614",  // #🤖︱ai
+  adminConsole:     "1509762780192837675",  // #🛠️・admin-console
+  staffChat:        "1509816635765293067",  // #🦑︱staff-chat
+  supportTicket:    "1509816628542570609",  // #🎫︱support-ticket
+  adminLogs:        "1509765406724980837",  // #admin-logs
+  ticketTranscript: "1509765427360694344",  // #ticket-transcripts
+  getRoles:         "1509816508291878972",  // #🎭︱get-roles
+  polls:            "1509816572322250852",  // #🗳️︱polls
+  announcements:    "1509816500272238682",  // #📣︱announcements
+  serverStats:      "1509816532232962098",  // #📊︱server-stats
+  // Status embed — use server-status-1 (where Lodge-Bot already posts)
+  statusEmbed:      "1509883790783156437",  // #server-status-1
+};
+
+// 🔴 PROTECTED CATEGORIES — NEVER TOUCH
+const PROTECTED_CATEGORY_IDS = new Set([
+  "1509765384364888115", // ✦ ADMIN SUITE
+  "1509765438630789120", // ✦ MAP LOGS
+  "1509765536643285022", // ✦ TRIBE LOGS
+]);
+
+// ── Server voice channel IDs (SERVER STATUS category) ────────
+const SERVERS = [
+  { name: "Island",      bm_id: "36970150", channel_id: "1509847604115279964", rcon_port: null, rcon_pass: null },
+  { name: "Center",      bm_id: null,       channel_id: "1509847671320481802", rcon_port: null, rcon_pass: null },
+  { name: "Scorched",    bm_id: null,       channel_id: "1509847685468000406", rcon_port: null, rcon_pass: null },
+  { name: "Aberration",  bm_id: null,       channel_id: "1509847698600104037", rcon_port: null, rcon_pass: null },
+  { name: "Astraeos",    bm_id: null,       channel_id: "1509847703293792357", rcon_port: null, rcon_pass: null },
+  { name: "Extinction",  bm_id: null,       channel_id: "1509847704757473481", rcon_port: null, rcon_pass: null },
+  { name: "Ragnarok",    bm_id: "36968477", channel_id: "1509847708809302098", rcon_port: null, rcon_pass: null },
+  { name: "Valguero",    bm_id: null,       channel_id: "1509847716526559252", rcon_port: null, rcon_pass: null },
+  { name: "Lost Colony", bm_id: "36950578", channel_id: "1509847718036508672", rcon_port: null, rcon_pass: null },
+  { name: "Club Ark",    bm_id: null,       channel_id: "1509847700076630096", rcon_port: null, rcon_pass: null },
+  { name: "Forglar",     bm_id: "36970148", channel_id: "1509847695672606720", rcon_port: null, rcon_pass: null },
+  { name: "Svartlfheim", bm_id: null,       channel_id: "1509847701494431815", rcon_port: null, rcon_pass: null },
+  { name: "Volcano",     bm_id: "36970154", channel_id: "1509847706938507344", rcon_port: null, rcon_pass: null },
 ];
 
+// ── Platform roles for #get-roles ────────────────────────────
 const PLATFORMS = [
-  { name: 'Xbox',        emoji: '🎮', roleId: '1389939183312699523' },
-  { name: 'PS5',         emoji: '🕹️', roleId: '1425828763538555004' },
-  { name: 'Steam',       emoji: '💻', roleId: '1389218790067404800' },
-  { name: 'Windows',     emoji: '🪟', roleId: '1386292242397925458' },
-  { name: 'GeForce Now', emoji: '☁️', roleId: '1386292322060206101' },
+  { name: "Xbox",        emoji: "🎮", roleId: "1389939183312699523" },
+  { name: "PS5",         emoji: "🕹️", roleId: "1425828763538555004" },
+  { name: "Steam",       emoji: "💻", roleId: "1389218790067404800" },
+  { name: "Windows",     emoji: "🪟", roleId: "1386292242397925458" },
+  { name: "GeForce Now", emoji: "☁️", roleId: "1386292322060206101" },
 ];
 
-let TICKET_CATEGORIES = [
-  { name: 'General Help',   emoji: '❓', description: 'General questions or assistance',  key: 'general_help'  },
-  { name: 'Admin Support',  emoji: '🛡️', description: 'Reach out to an admin directly',   key: 'admin_support' },
-  { name: 'Player Report',  emoji: '🚨', description: 'Report a player for rule breaking', key: 'player_report' },
-  { name: 'Tame/Item Loss', emoji: '🦖', description: 'Lost a tame or items? Let us know', key: 'tameitem_loss' },
-  { name: 'Bug Report',     emoji: '🐛', description: 'Report a server or game bug',       key: 'bug_report'    },
+// ── Ticket categories ─────────────────────────────────────────
+const TICKET_CATEGORIES = [
+  { name: "General Help",   emoji: "❓", description: "General questions or assistance",   key: "general_help"  },
+  { name: "Admin Support",  emoji: "🛡️", description: "Reach out to an admin directly",    key: "admin_support" },
+  { name: "Player Report",  emoji: "🚨", description: "Report a player for rule breaking",  key: "player_report" },
+  { name: "Tame/Item Loss", emoji: "🦖", description: "Lost a tame or items? Let us know",  key: "tameitem_loss" },
+  { name: "Bug Report",     emoji: "🐛", description: "Report a server or game bug",        key: "bug_report"    },
 ];
 
-// ── State ─────────────────────────────────────────────────────────────────────
-const conversationHistory = {};
-const escalatedTickets    = new Set();
-
-// ── Startup validation ────────────────────────────────────────────────────────
-if (!DISCORD_BOT_TOKEN) { console.error('❌ FATAL: DISCORD_BOT_TOKEN not set'); process.exit(1); }
-if (!ANTHROPIC_API_KEY) { console.error('⚠️  WARNING: ANTHROPIC_API_KEY not set — AI responses disabled'); }
-console.log(`✅ Config OK | AI: ${ANTHROPIC_API_KEY ? 'enabled' : 'DISABLED'}`);
-
-// ── Anthropic client ──────────────────────────────────────────────────────────
-const anthropic = ANTHROPIC_API_KEY ? new Anthropic({ apiKey: ANTHROPIC_API_KEY }) : null;
-
-// ── Keepalive ─────────────────────────────────────────────────────────────────
-const PORT = process.env.PORT || 3000;
-http.createServer((req, res) => { res.writeHead(200); res.end('Helena Walker is alive 🦕'); })
-  .listen(PORT, () => console.log(`🌐 Keepalive on port ${PORT}`));
-
-// ── Discord REST helper ───────────────────────────────────────────────────────
-async function dREST(method, path, body) {
-  try {
-    const res = await fetch(`https://discord.com/api/v10${path}`, {
-      method,
-      headers: { 'Authorization': `Bot ${DISCORD_BOT_TOKEN}`, 'Content-Type': 'application/json' },
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    const text = await res.text();
-    let data; try { data = JSON.parse(text); } catch { data = text; }
-    if (!res.ok) { console.error(`❌ Discord REST ${method} ${path} → ${res.status}:`, JSON.stringify(data).substring(0, 300)); return null; }
-    return data;
-  } catch (err) { console.error(`❌ Discord REST fetch error: ${err.message}`); return null; }
-}
-
-async function sendMessage(channelId, content) {
-  return dREST('POST', `/channels/${channelId}/messages`, { content });
-}
-
-async function sendEmbed(channelId, embed, components) {
-  return dREST('POST', `/channels/${channelId}/messages`, {
-    embeds: [embed.toJSON()],
-    ...(components ? { components: components.map(c => c.toJSON()) } : {}),
-  });
-}
-
-async function deleteMessage(channelId, messageId) {
-  return dREST('DELETE', `/channels/${channelId}/messages/${messageId}`);
-}
-
-// ── BattleMetrics ─────────────────────────────────────────────────────────────
-async function getBMServers() {
-  if (!BATTLEMETRICS_API_KEY || !BATTLEMETRICS_ORG_ID) return [];
-  try {
-    const res  = await fetch(
-      `https://api.battlemetrics.com/servers?filter[organizations]=${BATTLEMETRICS_ORG_ID}&page[size]=25`,
-      { headers: { Authorization: `Bearer ${BATTLEMETRICS_API_KEY}` } }
-    );
-    const json = await res.json();
-    return json.data || [];
-  } catch (err) { console.error('❌ BattleMetrics error:', err.message); return []; }
-}
-
-// ── Forward to ArkBot webhook ─────────────────────────────────────────────────
-async function forwardToWebhook(payload) {
-  if (!WEBHOOK_URL) return null;
-  try {
-    const res = await fetch(WEBHOOK_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-webhook-secret': WEBHOOK_SECRET || '' },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) { console.error(`❌ Webhook ${res.status}: ${await res.text()}`); return null; }
-    return await res.json();
-  } catch (err) { console.error(`❌ Webhook error: ${err.message}`); return null; }
-}
-
-// ── Helper: check if member is admin ─────────────────────────────────────────
-async function isAdminMember(guild, userId) {
-  try {
-    const member = await guild.members.fetch(userId);
-    // ID-based check first — fast and reliable
-    if (member.roles.cache.has(ADMIN_ROLE_ID) || member.roles.cache.has(ARK_ADMIN_ROLE_ID)) return true;
-    // Name-based fallback
-    await guild.roles.fetch();
-    const adminRole = guild.roles.cache.find(r => r.name.toLowerCase() === ADMIN_ROLE_NAME.toLowerCase());
-    if (adminRole && member.roles.cache.has(adminRole.id)) return true;
-    console.log(`ℹ️ ${member.displayName} is not an admin`);
-    return false;
-  } catch (err) { console.error('❌ isAdminMember error:', err.message); return false; }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// AI BRAIN — TICKET SUPPORT
-// ─────────────────────────────────────────────────────────────────────────────
-async function handleTicketMessage(message, guild, isFirstMessage = false) {
-  if (!anthropic) {
-    await message.channel.send('❌ AI brain offline — set `ANTHROPIC_API_KEY` in Railway. An admin will be with you shortly.');
-    return;
-  }
-
-  const channelId = message.channel.id;
-  if (!conversationHistory[channelId]) conversationHistory[channelId] = [];
-
-  if (!isFirstMessage) {
-    conversationHistory[channelId].push({
-      role: 'user',
-      content: `[${message.member.displayName}]: ${message.content}`,
-    });
-  }
-
-  if (conversationHistory[channelId].length > 30) {
-    conversationHistory[channelId] = conversationHistory[channelId].slice(-30);
-  }
-
-  const systemPrompt = `You are Helena, the support assistant for Skii's Lodge — an ARK Survival Ascended cluster. You are warm, helpful, and knowledgeable. You speak naturally and conversationally, never like a bot.
-
-Your job is to help players resolve their issues. You have deep knowledge of ARK Survival Ascended:
-- Taming: food, effectiveness, knockout methods, torpor drain for all creatures
-- Breeding: imprinting, mutations (20/20 cap), stat inheritance, maturation timers
-- All cluster maps: The Island, The Center, Scorched Earth, Forglar, Aberration, Club Ark, Svartlfheim, Astraeos, Extinction, Volcano, Valguero, Lost Colony
-- Base building, electricity, TEK tier, engrams, crafting
-- Boss fights, artifacts, terminals, ascension
-- Tribes, alliances, permissions, tribe logs
-- Common ASA bugs and workarounds
-- Server rules: PVE, turrets set to wild creatures only (inside base or TEK shield can be all targets), no building at spawn points, no blocking artifacts, taming traps must be removed within 12 hours
-- Server rates: 2.5x taming, 2.5x harvesting, 2.5x XP, 10x maturation, 20x egg hatch, 10x imprint, 0.15x cuddle interval
-- Server admins: Skidogg, iNFAMOUS, Remi, Captain Rhynio
-
-Response strategy:
-1. Try to fully resolve the issue yourself with clear, helpful info
-2. If it genuinely requires admin action (tame/item restoration, player bans, base wipes, server-side fixes, tribe log reviews) add [ESCALATE] at the very end of your message
-3. When resolved, tell the player they can close the ticket with the 🔒 button
-4. Be warm and patient — players may be frustrated
-
-Add [ESCALATE] ONLY when admin intervention is truly needed. Do NOT add it for questions, how-to queries, rule clarifications, or anything you can answer yourself.`;
-
-  try {
-    const messages = isFirstMessage
-      ? [{ role: 'user', content: conversationHistory[channelId][0]?.content || 'A player just opened a support ticket.' }]
-      : conversationHistory[channelId];
-
-    const response = await anthropic.messages.create({
-      model: 'claude-opus-4-5',
-      max_tokens: 1000,
-      system: systemPrompt,
-      messages,
-    });
-
-    const fullReply      = response.content[0].text;
-    const shouldEscalate = fullReply.includes('[ESCALATE]');
-    const cleanReply     = fullReply.replace('[ESCALATE]', '').trim();
-
-    conversationHistory[channelId].push({ role: 'assistant', content: cleanReply });
-
-    await sendEmbed(channelId,
-      new EmbedBuilder()
-        .setDescription(cleanReply)
-        .setColor(shouldEscalate ? COLORS.yellow : COLORS.blue)
-        .setFooter({ text: 'Helena • Support' })
-        .setTimestamp()
-    );
-
-    if (shouldEscalate && !escalatedTickets.has(channelId)) {
-      escalatedTickets.add(channelId);
-
-      await sendEmbed(channelId,
-        new EmbedBuilder()
-          .setTitle('🚨  ADMIN ATTENTION NEEDED')
-          .setDescription(`<@&${ADMIN_ROLE_ID}> <@&${ARK_ADMIN_ROLE_ID}> — this ticket requires admin assistance.\n\nHelena has reviewed the issue and determined it needs a human admin to resolve.`)
-          .setColor(COLORS.red)
-          .setFooter({ text: 'Helena • Escalated Ticket' })
-          .setTimestamp()
-      );
-
-      await sendMessage(ADMIN_LOGS_CHANNEL_ID,
-        `🚨 **[Auto-Escalated]** <#${channelId}> | **${message.member.displayName}** | Needs admin review\n<@&${ADMIN_ROLE_ID}> <@&${ARK_ADMIN_ROLE_ID}>`
-      );
-
-      console.log(`🚨 Auto-escalated ticket ${channelId} for ${message.member.displayName}`);
-    }
-
-  } catch (err) {
-    console.error('❌ Anthropic ticket error:', err.message);
-    await message.channel.send('❌ I ran into an issue. An admin will be with you shortly.');
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// AI BRAIN — ADMIN CONSOLE / STAFF CHAT
-// ─────────────────────────────────────────────────────────────────────────────
-async function handleHelenaMessage(message, guild) {
-  if (!anthropic) {
-    await message.channel.send('❌ AI brain offline — set `ANTHROPIC_API_KEY` in Railway env vars.');
-    return;
-  }
-
-  const channelId = message.channel.id;
-  if (!conversationHistory[channelId]) conversationHistory[channelId] = [];
-
-  conversationHistory[channelId].push({
-    role: 'user',
-    content: `[${message.member.displayName}]: ${message.content}`,
-  });
-
-  if (conversationHistory[channelId].length > 20) {
-    conversationHistory[channelId] = conversationHistory[channelId].slice(-20);
-  }
-
-  const servers    = await getBMServers();
-  const serverList = servers.length
-    ? servers.map(s => `${s.attributes.name} — ${s.attributes.status} — ${s.attributes.players}/${s.attributes.maxPlayers}`).join('\n')
-    : 'BattleMetrics not configured.';
-
-  const systemPrompt = `You are Helena, the intelligent admin assistant for Skii's Lodge — an ARK Survival Ascended cluster. You are sharp, calm, and direct. You speak naturally like a trusted team member. You only respond in #admin-console and #staff-chat.
-
-When an admin asks you to take action, respond naturally AND append an action tag at the END of your message:
-
-[ACTION:action_name:param1:param2:...]
-
-Available actions:
-- [ACTION:poll:question|option1|option2|option3:durationHours] — Post a poll to #ark-polls
-- [ACTION:add_map:mapName:emoji] — Add a map to the cluster
-- [ACTION:remove_map:mapName] — Remove a map from the cluster
-- [ACTION:add_ticket_category:name:emoji:description] — Add a ticket category
-- [ACTION:remove_ticket_category:name] — Remove a ticket category
-- [ACTION:online] — Show live player counts from BattleMetrics
-
-Current cluster servers:
-${serverList}
-
-Current maps: ${MAPS.map(m => m.name).join(', ')}
-Current ticket categories: ${TICKET_CATEGORIES.map(c => c.name).join(', ')}
-Server admins: Skidogg, iNFAMOUS, Remi, Captain Rhynio
-
-Respond naturally first, action tag last. If no action needed, respond normally with no action tag.`;
-
-  try {
-    const response = await anthropic.messages.create({
-      model: 'claude-opus-4-5',
-      max_tokens: 1000,
-      system: systemPrompt,
-      messages: conversationHistory[channelId],
-    });
-
-    const fullReply  = response.content[0].text;
-    const cleanReply = fullReply.replace(/\[ACTION:[^\]]+\]/g, '').trim();
-    const actions    = fullReply.match(/\[ACTION:[^\]]+\]/g) || [];
-
-    conversationHistory[channelId].push({ role: 'assistant', content: fullReply });
-
-    await sendEmbed(channelId,
-      new EmbedBuilder()
-        .setDescription(cleanReply)
-        .setColor(COLORS.purple)
-        .setFooter({ text: 'Helena • Admin Console' })
-        .setTimestamp()
-    );
-
-    for (const actionStr of actions) {
-      await executeAction(actionStr, message, guild);
-    }
-
-  } catch (err) {
-    console.error('❌ Anthropic admin error:', err.message);
-    await message.channel.send('❌ I ran into an issue. Please try again.');
-  }
-}
-
-// ── Admin action executor ─────────────────────────────────────────────────────
-async function executeAction(actionStr, message, guild) {
-  const inner  = actionStr.replace('[ACTION:', '').replace(']', '');
-  const parts  = inner.split(':');
-  const action = parts[0];
-
-  console.log(`⚙️ Admin action: ${action} | ${parts.slice(1).join(' | ')}`);
-
-  switch (action) {
-
-    case 'online': {
-      const servers = await getBMServers();
-      if (!servers.length) {
-        await sendEmbed(message.channel.id, new EmbedBuilder().setTitle('🖥️ Server Status').setDescription('BattleMetrics not configured.').setColor(COLORS.red));
-        return;
-      }
-      const embed = new EmbedBuilder().setTitle('🖥️  CLUSTER STATUS').setColor(COLORS.blue).setFooter({ text: 'Helena • BattleMetrics' }).setTimestamp();
-      let total = 0;
-      for (const s of servers) {
-        const a = s.attributes;
-        embed.addFields({ name: `${a.status === 'online' ? '🟢' : '🔴'} ${a.name}`, value: `**${a.players}/${a.maxPlayers}** players`, inline: true });
-        total += a.players || 0;
-      }
-      embed.setDescription(`**Total players online: ${total}**`);
-      await sendEmbed(message.channel.id, embed);
-      break;
-    }
-
-    case 'poll': {
-      const pollData    = parts[1];
-      const durationHrs = parseInt(parts[2]) || 24;
-      const pollParts   = pollData ? pollData.split('|') : [];
-      const question    = pollParts[0];
-      const answers     = pollParts.slice(1);
-      if (!question || answers.length < 2) {
-        await sendMessage(message.channel.id, '❌ Poll needs a question and at least 2 options.');
-        return;
-      }
-      const pollEmbed = new EmbedBuilder()
-        .setTitle(`📊  ${question}`)
-        .setDescription(answers.map((a, i) => `${['1️⃣','2️⃣','3️⃣','4️⃣','5️⃣'][i] || `${i+1}.`} ${a}`).join('\n') + `\n\n⏱️ Duration: **${durationHrs} hours**`)
-        .setColor(COLORS.blue).setFooter({ text: 'Helena • Polls — React to vote!' }).setTimestamp();
-      await sendEmbed(POLLS_CHANNEL_ID, pollEmbed);
-      await sendEmbed(message.channel.id,
-        new EmbedBuilder().setTitle('📊  POLL PUBLISHED').setDescription(`**Q:** ${question}\n**Options:** ${answers.join(', ')}\n**Duration:** ${durationHrs}h\n\nPosted to <#${POLLS_CHANNEL_ID}>`).setColor(COLORS.green).setFooter({ text: 'Helena • Polls' }).setTimestamp()
-      );
-      break;
-    }
-
-    case 'add_map': {
-      const mapName = parts[1]; const mapEmoji = parts[2] || '🗺️';
-      if (!MAPS.find(m => m.name === mapName)) {
-        MAPS.push({ name: mapName, emoji: mapEmoji });
-        await sendEmbed(message.channel.id, new EmbedBuilder().setTitle('✅  MAP ADDED').setDescription(`**${mapEmoji} ${mapName}** added.\n\nRestart to update #get-roles.`).setColor(COLORS.green).setFooter({ text: 'Helena • Config' }).setTimestamp());
-      } else { await sendMessage(message.channel.id, `⚠️ **${mapName}** is already in the config.`); }
-      break;
-    }
-
-    case 'remove_map': {
-      const mapName = parts[1];
-      const idx     = MAPS.findIndex(m => m.name === mapName);
-      if (idx !== -1) {
-        MAPS.splice(idx, 1);
-        await sendEmbed(message.channel.id, new EmbedBuilder().setTitle('✅  MAP REMOVED').setDescription(`**${mapName}** removed.\n\nRestart to update #get-roles.`).setColor(COLORS.orange).setFooter({ text: 'Helena • Config' }).setTimestamp());
-      } else { await sendMessage(message.channel.id, `⚠️ Map **"${mapName}"** not found.`); }
-      break;
-    }
-
-    case 'add_ticket_category': {
-      const catName = parts[1]; const catEmoji = parts[2] || '📋'; const catDesc = parts.slice(3).join(':') || 'Support category';
-      const catKey  = catName.toLowerCase().replace(/[^a-z0-9]/g, '_');
-      if (!TICKET_CATEGORIES.find(c => c.name === catName)) {
-        TICKET_CATEGORIES.push({ name: catName, emoji: catEmoji, description: catDesc, key: catKey });
-        await sendEmbed(message.channel.id, new EmbedBuilder().setTitle('✅  CATEGORY ADDED').setDescription(`**${catEmoji} ${catName}** added.\n\nRestart to update the ticket panel.`).setColor(COLORS.green).setFooter({ text: 'Helena • Config' }).setTimestamp());
-      } else { await sendMessage(message.channel.id, `⚠️ Category **"${catName}"** already exists.`); }
-      break;
-    }
-
-    case 'remove_ticket_category': {
-      const catName = parts[1];
-      const idx     = TICKET_CATEGORIES.findIndex(c => c.name === catName);
-      if (idx !== -1) {
-        TICKET_CATEGORIES.splice(idx, 1);
-        await sendEmbed(message.channel.id, new EmbedBuilder().setTitle('✅  CATEGORY REMOVED').setDescription(`**${catName}** removed.\n\nRestart to update the ticket panel.`).setColor(COLORS.orange).setFooter({ text: 'Helena • Config' }).setTimestamp());
-      } else { await sendMessage(message.channel.id, `⚠️ Category **"${catName}"** not found.`); }
-      break;
-    }
-
-    default: console.log(`⚠️ Unknown action: ${action}`);
-  }
-}
-
-// ── Role embeds ───────────────────────────────────────────────────────────────
-async function postRoleEmbeds(guild) {
-  const rolesChannel = guild.channels.cache.get(ROLES_CHANNEL_ID);
-  if (!rolesChannel) return console.error(`❌ Could not find #${ROLES_CHANNEL_NAME}`);
-
-  const messages = await rolesChannel.messages.fetch({ limit: 20 });
-  if (messages.some(m => m.author.id === client.user.id)) return console.log('ℹ️ Role embeds already posted.');
-
-  await rolesChannel.send({
-    embeds: [new EmbedBuilder().setTitle('🗺️  SELECT YOUR MAP ROLES').setDescription('Select the maps you play on!\nYou can select multiple maps.').setColor(COLORS.blue).setFooter({ text: 'Helena • Cluster Roles' }).setTimestamp()],
-    components: [new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('map_roles').setPlaceholder('🗺️ Select your maps...').setMinValues(1).setMaxValues(MAPS.length).addOptions(MAPS.map(m => ({ label: m.name, value: m.name, emoji: m.emoji }))))],
-  });
-
-  await rolesChannel.send({
-    embeds: [new EmbedBuilder().setTitle('🎮  SELECT YOUR PLATFORM ROLE').setDescription('Let us know what platform you play on!').setColor(COLORS.orange).setFooter({ text: 'Helena • Cluster Roles' }).setTimestamp()],
-    components: [new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('platform_roles').setPlaceholder('🎮 Select your platform...').setMinValues(1).setMaxValues(1).addOptions(PLATFORMS.map(p => ({ label: p.name, value: p.name, emoji: p.emoji }))))],
-  });
-
-  console.log('✅ Role embeds posted!');
-}
-
-// ── Ticket panel ──────────────────────────────────────────────────────────────
-async function postTicketPanel(guild) {
-  const ticketChannel = guild.channels.cache.get(SUPPORT_TRIGGER_CHANNEL_ID);
-  if (!ticketChannel) return console.error(`❌ Could not find #${SUPPORT_TICKET_CHANNEL_NAME}`);
-
-  const messages = await ticketChannel.messages.fetch({ limit: 20 });
-  if (messages.some(m => m.author.id === client.user.id)) return console.log('ℹ️ Ticket panel already posted.');
-
-  const ticketEmbed = new EmbedBuilder()
-    .setTitle('🎫  SUPPORT TICKETS')
-    .setDescription(
-      'Need help? Click a button below or just type your issue — Helena will respond immediately!\n\n' +
-      TICKET_CATEGORIES.map(c => `${c.emoji} **${c.name}** — ${c.description}`).join('\n') +
-      '\n\n*A private channel will be created for you. Helena will respond instantly and escalate to an admin if needed.*'
-    )
-    .setColor(COLORS.purple).setFooter({ text: 'Helena • Support System' }).setTimestamp();
-
-  const row1 = new ActionRowBuilder().addComponents(
-    TICKET_CATEGORIES.slice(0, 3).map(cat =>
-      new ButtonBuilder()
-        .setCustomId(`open_ticket_${cat.key}`)
-        .setLabel(cat.name).setEmoji(cat.emoji).setStyle(ButtonStyle.Secondary)
-    )
-  );
-  const row2 = new ActionRowBuilder().addComponents(
-    TICKET_CATEGORIES.slice(3).map(cat =>
-      new ButtonBuilder()
-        .setCustomId(`open_ticket_${cat.key}`)
-        .setLabel(cat.name).setEmoji(cat.emoji).setStyle(ButtonStyle.Secondary)
-    )
-  );
-
-  await ticketChannel.send({ embeds: [ticketEmbed], components: [row1, row2] });
-  console.log('✅ Ticket panel posted!');
-}
-
-// ── Startup online message ────────────────────────────────────────────────────
-async function postOnlineMessage(guild) {
-  const startTs = Math.floor(Date.now() / 1000);
-
-  for (const [channelName, label] of [
-    [ADMIN_CONSOLE_CHANNEL_NAME, 'Admin Console'],
-    [STAFF_CHAT_CHANNEL_NAME,    'Staff Chat'],
-  ]) {
-    const channelId = channelName === ADMIN_CONSOLE_CHANNEL_NAME ? ADMIN_CONSOLE_CHANNEL_ID : STAFF_CHAT_CHANNEL_ID;
-    const channel = guild.channels.cache.get(channelId);
-    if (!channel) { console.error(`❌ Could not find channel ID ${channelId} (#${channelName})`); continue; }
-
-    const isAdmin = label === 'Admin Console';
-    const embed = new EmbedBuilder()
-      .setTitle('🟢  HELENA IS ONLINE')
-      .setDescription(
-        `Systems are up and I am ready to go.\n\n` +
-        `🤖 **AI Brain:** ${ANTHROPIC_API_KEY ? '✅ Active' : '❌ Disabled — set ANTHROPIC_API_KEY in Railway'}\n` +
-        `🕐 **Started:** <t:${startTs}:F>\n\n` +
-        (isAdmin
-          ? `*Talk to me naturally — polls, config changes, server status, and more. I am also actively monitoring support tickets and responding to players automatically.*`
-          : `*I am online and monitoring tickets. Talk to me here if you need anything.*`)
-      )
-      .setColor(COLORS.green).setFooter({ text: `Helena • ${label}` }).setTimestamp();
-
-    await channel.send({ embeds: [embed] });
-    console.log(`✅ Online message → #${channelName}`);
-  }
-}
-
-// ── Create ticket channel ─────────────────────────────────────────────────────
-async function createTicketChannel(guild, member, category, originalMessage = null) {
-  const existingChannel = guild.channels.cache.find(
-    c => c.name.startsWith(`open-${member.user.username.toLowerCase()}`)
-  );
-  if (existingChannel) return { existing: existingChannel };
-
-  const adminRole    = guild.roles.cache.get(ADMIN_ROLE_ID);
-  const arkAdminRole = guild.roles.cache.get(ARK_ADMIN_ROLE_ID);
-
-  const ticketChannel = await guild.channels.create({
-    name: `open-${member.user.username.toLowerCase()}`,
-    type: ChannelType.GuildText,
-    parent: OPEN_TICKETS_CATEGORY_ID,
-    permissionOverwrites: [
-      { id: guild.roles.everyone,  deny:  [PermissionFlagsBits.ViewChannel] },
-      { id: member.id,             allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
-      { id: client.user.id,        allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ReadMessageHistory] },
-      ...(adminRole    ? [{ id: adminRole.id,    allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] }] : []),
-      ...(arkAdminRole ? [{ id: arkAdminRole.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] }] : []),
+// ── Server choices for slash commands ────────────────────────
+const serverChoices    = SERVERS.map(s => ({ name: s.name, value: s.name }));
+const serverChoicesAll = [...serverChoices, { name: "All Servers", value: "all" }];
+
+// ── Slash commands ────────────────────────────────────────────
+const SLASH_COMMANDS = [
+  {
+    name: "announce",
+    description: "Post an announcement to a Discord channel",
+    options: [
+      { name: "channel", description: "Channel to post in",       type: ApplicationCommandOptionType.Channel, required: true },
+      { name: "message", description: "The announcement message", type: ApplicationCommandOptionType.String,  required: true },
+      { name: "ping",    description: "Ping @everyone?",          type: ApplicationCommandOptionType.Boolean, required: false },
     ],
-  });
+  },
+  {
+    name: "broadcast",
+    description: "Broadcast a message in-game on an ARK server via RCON",
+    options: [
+      { name: "server",  description: "Server(s) to broadcast on", type: ApplicationCommandOptionType.String, required: true, choices: serverChoicesAll },
+      { name: "message", description: "Message to broadcast",      type: ApplicationCommandOptionType.String, required: true },
+    ],
+  },
+  {
+    name: "warn",
+    description: "Issue a warning to a player",
+    options: [
+      { name: "player", description: "Player Steam ID or name",  type: ApplicationCommandOptionType.String, required: true },
+      { name: "server", description: "Server the player is on",  type: ApplicationCommandOptionType.String, required: true, choices: serverChoices },
+      { name: "reason", description: "Reason for the warning",   type: ApplicationCommandOptionType.String, required: true },
+    ],
+  },
+  {
+    name: "kick",
+    description: "Kick a player from an ARK server",
+    options: [
+      { name: "player", description: "Player Steam ID",          type: ApplicationCommandOptionType.String, required: true },
+      { name: "server", description: "Server to kick from",      type: ApplicationCommandOptionType.String, required: true, choices: serverChoicesAll },
+      { name: "reason", description: "Reason for the kick",      type: ApplicationCommandOptionType.String, required: true },
+    ],
+  },
+  {
+    name: "ban",
+    description: "Ban a player from the cluster",
+    options: [
+      { name: "player",   description: "Player Steam ID",                     type: ApplicationCommandOptionType.String, required: true },
+      { name: "server",   description: "Server(s) to ban on",                 type: ApplicationCommandOptionType.String, required: true, choices: serverChoicesAll },
+      { name: "reason",   description: "Reason for the ban",                  type: ApplicationCommandOptionType.String, required: true },
+      { name: "duration", description: "Duration (e.g. 7d, 30d, permanent)",  type: ApplicationCommandOptionType.String, required: false },
+    ],
+  },
+  {
+    name: "unban",
+    description: "Unban a player",
+    options: [
+      { name: "player", description: "Player Steam ID",       type: ApplicationCommandOptionType.String, required: true },
+      { name: "server", description: "Server(s) to unban on", type: ApplicationCommandOptionType.String, required: true, choices: serverChoicesAll },
+    ],
+  },
+  {
+    name: "player-history",
+    description: "View a player's warning and ban history",
+    options: [
+      { name: "player", description: "Player Steam ID", type: ApplicationCommandOptionType.String, required: true },
+    ],
+  },
+  {
+    name: "server-save",
+    description: "Force-save an ARK server world via RCON",
+    options: [
+      { name: "server", description: "Server to save", type: ApplicationCommandOptionType.String, required: true, choices: serverChoicesAll },
+    ],
+  },
+  {
+    name: "server-message",
+    description: "Send an in-game chat message on an ARK server",
+    options: [
+      { name: "server",  description: "Server to message", type: ApplicationCommandOptionType.String, required: true, choices: serverChoicesAll },
+      { name: "message", description: "Message to send",   type: ApplicationCommandOptionType.String, required: true },
+    ],
+  },
+];
 
-  const cat = category || TICKET_CATEGORIES[0];
+// ============================================================
+//  INTERNALS
+// ============================================================
 
-  const ticketEmbed = new EmbedBuilder()
-    .setTitle(`${cat.emoji}  ${cat.name} — Support Ticket`)
-    .setDescription(
-      `Hey ${member}! 👋\n\nI'm Helena, the cluster assistant. I've received your message and I'm looking into it right now.\n\n` +
-      (originalMessage ? `📝 **Your message:** ${originalMessage}\n\n` : '') +
-      `📋 **Category:** ${cat.name}\n🕐 **Opened:** <t:${Math.floor(Date.now() / 1000)}:F>\n\n` +
-      `*If your issue needs an admin I will escalate it automatically. You can close this ticket at any time using the button below.*`
-    )
-    .setColor(COLORS.green).setFooter({ text: 'Helena • Support Ticket — OPEN' }).setTimestamp();
+const warnRecords = new Map();
+const banRecords  = new Map();
+let ticketCounter = 0;
+const openTickets = new Map();
+const channelAI   = new Map();
+const AI_TIMEOUT_MS = 10 * 60 * 1000;
+let statusMessageId = null;
+const lastKnown     = {};
 
-  const closeButton = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('ticket_close').setLabel('Close Ticket').setEmoji('🔒').setStyle(ButtonStyle.Danger)
-  );
-
-  await ticketChannel.send({ embeds: [ticketEmbed], components: [closeButton] });
-  console.log(`✅ Ticket #${ticketChannel.name} opened for ${member.user.username} [${cat.name}]`);
-  return { channel: ticketChannel };
-}
-
-// ── Create roles ──────────────────────────────────────────────────────────────
-async function createRoles(guild) {
-  console.log('🔨 Creating roles...');
-  const existingRoles = guild.roles.cache.map(r => r.name);
-  for (const map of MAPS) {
-    if (!existingRoles.includes(map.name)) {
-      await guild.roles.create({ name: map.name, color: COLORS.orange, mentionable: true, reason: 'Helena - Map Role' });
-    }
-  }
-  for (const platform of PLATFORMS) {
-    if (!existingRoles.includes(platform.name)) {
-      await guild.roles.create({ name: platform.name, color: COLORS.blue, mentionable: true, reason: 'Helena - Platform Role' });
-    }
-  }
-  for (const category of TICKET_CATEGORIES) {
-    const roleName = `Ticket - ${category.name}`;
-    if (!existingRoles.includes(roleName)) {
-      await guild.roles.create({ name: roleName, color: COLORS.purple, mentionable: false, reason: 'Helena - Ticket Role' });
-    }
-  }
-  console.log('✅ All roles created!');
-}
-
-// ── Discord client ────────────────────────────────────────────────────────────
+// ── Discord client ────────────────────────────────────────────
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -600,213 +205,760 @@ const client = new Client({
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildMembers,
   ],
-  partials: [Partials.Channel, Partials.Message, Partials.Reaction],
+  partials: [Partials.Channel],
 });
 
-client.once('clientReady', async () => {
+// ── Anthropic client ──────────────────────────────────────────
+const anthropic = ANTHROPIC_API_KEY ? new Anthropic({ apiKey: ANTHROPIC_API_KEY }) : null;
+
+// ── Keepalive ─────────────────────────────────────────────────
+const PORT = process.env.PORT || 3000;
+http.createServer((req, res) => { res.writeHead(200); res.end("Helena Walker is alive 🦕"); })
+  .listen(PORT, () => console.log(`🌐 Keepalive on port ${PORT}`));
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// ── Guards ────────────────────────────────────────────────────
+function isAdmin(member) {
+  if (!member) return false;
+  if (member.roles.cache.has(ROLES.admin)) return true;
+  if (ROLES.staff && member.roles.cache.has(ROLES.staff)) return true;
+  return member.permissions.has(PermissionFlagsBits.Administrator);
+}
+
+function isStaff(member) {
+  return isAdmin(member);
+}
+
+// ── Discord REST helper ───────────────────────────────────────
+async function dREST(method, path, body) {
+  try {
+    const res = await fetch(`https://discord.com/api/v10${path}`, {
+      method,
+      headers: { Authorization: `Bot ${DISCORD_TOKEN}`, "Content-Type": "application/json" },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const text = await res.text();
+    let data; try { data = JSON.parse(text); } catch { data = text; }
+    if (!res.ok) { console.error(`❌ REST ${method} ${path} → ${res.status}:`, JSON.stringify(data).slice(0, 200)); return null; }
+    return data;
+  } catch (err) { console.error(`❌ REST fetch error: ${err.message}`); return null; }
+}
+
+// ── Logging helpers ───────────────────────────────────────────
+function findChannel(guild, nameFragment) {
+  return guild.channels.cache.find(c =>
+    c.name.toLowerCase().includes(nameFragment.toLowerCase()) &&
+    !PROTECTED_CATEGORY_IDS.has(c.parentId)
+  );
+}
+
+async function logAction(guild, color, title, fields) {
+  const ch = findChannel(guild, "helena-logs") || guild.channels.cache.get(CHANNEL_IDS.adminLogs);
+  if (!ch) return;
+  await ch.send({ embeds: [new EmbedBuilder().setTitle(title).setColor(color).addFields(fields).setTimestamp()] }).catch(() => {});
+}
+
+async function logPlayerAction(guild, color, title, fields) {
+  const ch = findChannel(guild, "player-records") || findChannel(guild, "ban-warnings");
+  if (!ch) return;
+  await ch.send({ embeds: [new EmbedBuilder().setTitle(title).setColor(color).addFields(fields).setTimestamp()] }).catch(() => {});
+}
+
+async function logAnnouncement(guild, fields) {
+  const ch = findChannel(guild, "announcement-history") || guild.channels.cache.get(CHANNEL_IDS.adminLogs);
+  if (!ch) return;
+  await ch.send({ embeds: [new EmbedBuilder().setTitle("📢 Announcement Sent").setColor(0x5865f2).addFields(fields).setTimestamp()] }).catch(() => {});
+}
+
+function rconSummary(results) {
+  return results.map(r => r.success ? `✅ ${r.server}` : `❌ ${r.server}: ${r.error}`).join("\n");
+}
+
+// ── RCON ─────────────────────────────────────────────────────
+async function sendRcon(serverName, command) {
+  if (!Rcon) return { success: false, error: "rcon-client not installed" };
+  const srv = SERVERS.find(s => s.name === serverName);
+  if (!srv) return { success: false, error: "Server not found" };
+  if (!srv.rcon_port || !srv.rcon_pass) return { success: false, error: `RCON not configured for ${serverName}` };
+  try {
+    const rcon = await Rcon.connect({ host: "24.140.110.115", port: srv.rcon_port, password: srv.rcon_pass, timeout: 5000 });
+    const res  = await rcon.send(command);
+    await rcon.end();
+    return { success: true, response: res || "OK" };
+  } catch (err) { return { success: false, error: err.message }; }
+}
+
+async function sendRconMany(serverNameOrAll, command) {
+  const targets = serverNameOrAll === "all" ? SERVERS.map(s => s.name) : [serverNameOrAll];
+  const results = [];
+  for (const name of targets) {
+    results.push({ server: name, ...(await sendRcon(name, command)) });
+    await sleep(300);
+  }
+  return results;
+}
+
+// ── Slash command handlers ────────────────────────────────────
+async function handleAnnounce(interaction) {
+  const channel = interaction.options.getChannel("channel");
+  const message = interaction.options.getString("message");
+  const ping    = interaction.options.getBoolean("ping") ?? false;
+  await channel.send(ping ? `@everyone\n${message}` : message);
+  await interaction.editReply({ content: `✅ Announcement posted in <#${channel.id}>`, ephemeral: true });
+  await logAnnouncement(interaction.guild, [
+    { name: "Admin",   value: interaction.user.tag, inline: true },
+    { name: "Channel", value: `<#${channel.id}>`,   inline: true },
+    { name: "Pinged",  value: ping ? "Yes" : "No",  inline: true },
+    { name: "Message", value: message },
+  ]);
+}
+
+async function handleBroadcast(interaction) {
+  const server  = interaction.options.getString("server");
+  const message = interaction.options.getString("message");
+  const results = await sendRconMany(server, `Broadcast ${message}`);
+  const summary = rconSummary(results);
+  await interaction.editReply({ content: `📡 Broadcast results:\n${summary}`, ephemeral: true });
+  await logAction(interaction.guild, 0x5865f2, "📡 In-Game Broadcast", [
+    { name: "Admin",   value: interaction.user.tag, inline: true },
+    { name: "Server",  value: server,               inline: true },
+    { name: "Message", value: message },
+    { name: "Result",  value: summary },
+  ]);
+}
+
+async function handleWarn(interaction) {
+  const player = interaction.options.getString("player");
+  const server = interaction.options.getString("server");
+  const reason = interaction.options.getString("reason");
+  if (!warnRecords.has(player)) warnRecords.set(player, []);
+  warnRecords.get(player).push({ reason, admin: interaction.user.tag, server, date: new Date().toISOString() });
+  const rconResult = await sendRcon(server, `Broadcast WARNING issued to ${player}: ${reason}`);
+  await interaction.editReply({ content: `⚠️ Warning issued to **${player}** on **${server}**.\nRCON: ${rconResult.success ? "✅ Sent" : `❌ ${rconResult.error}`}`, ephemeral: true });
+  await logPlayerAction(interaction.guild, 0xffa500, "⚠️ Player Warning", [
+    { name: "Admin",          value: interaction.user.tag,                inline: true },
+    { name: "Player",         value: player,                              inline: true },
+    { name: "Server",         value: server,                              inline: true },
+    { name: "Reason",         value: reason },
+    { name: "Total Warnings", value: String(warnRecords.get(player).length), inline: true },
+  ]);
+}
+
+async function handleKick(interaction) {
+  const player = interaction.options.getString("player");
+  const server = interaction.options.getString("server");
+  const reason = interaction.options.getString("reason");
+  const results = await sendRconMany(server, `KickPlayer ${player}`);
+  const summary = rconSummary(results);
+  await interaction.editReply({ content: `👢 Kick results:\n${summary}`, ephemeral: true });
+  await logPlayerAction(interaction.guild, 0xff6b00, "👢 Player Kicked", [
+    { name: "Admin",  value: interaction.user.tag, inline: true },
+    { name: "Player", value: player,               inline: true },
+    { name: "Server", value: server,               inline: true },
+    { name: "Reason", value: reason },
+    { name: "RCON",   value: summary },
+  ]);
+}
+
+async function handleBan(interaction) {
+  const player   = interaction.options.getString("player");
+  const server   = interaction.options.getString("server");
+  const reason   = interaction.options.getString("reason");
+  const duration = interaction.options.getString("duration") ?? "Permanent";
+  banRecords.set(player, { reason, admin: interaction.user.tag, server, duration, date: new Date().toISOString() });
+  const results = await sendRconMany(server, `BanPlayer ${player}`);
+  const summary = rconSummary(results);
+  await interaction.editReply({ content: `🔨 Ban results:\n${summary}`, ephemeral: true });
+  await logPlayerAction(interaction.guild, 0xff0000, "🔨 Player Banned", [
+    { name: "Admin",    value: interaction.user.tag, inline: true },
+    { name: "Player",   value: player,               inline: true },
+    { name: "Server",   value: server,               inline: true },
+    { name: "Duration", value: duration,             inline: true },
+    { name: "Reason",   value: reason },
+    { name: "RCON",     value: summary },
+  ]);
+}
+
+async function handleUnban(interaction) {
+  const player = interaction.options.getString("player");
+  const server = interaction.options.getString("server");
+  banRecords.delete(player);
+  const results = await sendRconMany(server, `UnbanPlayer ${player}`);
+  const summary = rconSummary(results);
+  await interaction.editReply({ content: `✅ Unban results:\n${summary}`, ephemeral: true });
+  await logPlayerAction(interaction.guild, 0x00cc44, "✅ Player Unbanned", [
+    { name: "Admin",  value: interaction.user.tag, inline: true },
+    { name: "Player", value: player,               inline: true },
+    { name: "Server", value: server,               inline: true },
+    { name: "RCON",   value: summary },
+  ]);
+}
+
+async function handlePlayerHistory(interaction) {
+  const player   = interaction.options.getString("player");
+  const warnings = warnRecords.get(player) ?? [];
+  const ban      = banRecords.get(player);
+  const embed = new EmbedBuilder().setTitle(`📁 Player History — ${player}`).setColor(0x5865f2).setTimestamp();
+  if (warnings.length === 0 && !ban) {
+    embed.setDescription("No records found for this player.");
+  } else {
+    if (warnings.length > 0) embed.addFields({ name: `⚠️ Warnings (${warnings.length})`, value: warnings.map((w, i) => `**${i + 1}.** ${w.reason} — by ${w.admin} on ${w.server} (${w.date.slice(0, 10)})`).join("\n") });
+    if (ban) embed.addFields({ name: "🔨 Active Ban", value: `Reason: ${ban.reason}\nDuration: ${ban.duration}\nServer: ${ban.server}\nBanned by: ${ban.admin}\nDate: ${ban.date.slice(0, 10)}` });
+  }
+  await interaction.editReply({ embeds: [embed], ephemeral: true });
+}
+
+async function handleServerSave(interaction) {
+  const server  = interaction.options.getString("server");
+  const results = await sendRconMany(server, "SaveWorld");
+  const summary = rconSummary(results);
+  await interaction.editReply({ content: `💾 Save results:\n${summary}`, ephemeral: true });
+  await logAction(interaction.guild, 0x1ec864, "💾 World Saved", [
+    { name: "Admin",  value: interaction.user.tag, inline: true },
+    { name: "Server", value: server,               inline: true },
+    { name: "Result", value: summary },
+  ]);
+}
+
+async function handleServerMessage(interaction) {
+  const server  = interaction.options.getString("server");
+  const message = interaction.options.getString("message");
+  const results = await sendRconMany(server, `ServerChat [Helena] ${message}`);
+  const summary = rconSummary(results);
+  await interaction.editReply({ content: `💬 Message results:\n${summary}`, ephemeral: true });
+  await logAction(interaction.guild, 0x5865f2, "💬 In-Game Server Message", [
+    { name: "Admin",   value: interaction.user.tag, inline: true },
+    { name: "Server",  value: server,               inline: true },
+    { name: "Message", value: message },
+    { name: "Result",  value: summary },
+  ]);
+}
+
+// ── Slash command registration ────────────────────────────────
+async function registerSlashCommands() {
+  const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
+  try {
+    console.log("[Slash] Registering commands...");
+    await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: SLASH_COMMANDS });
+    console.log("[Slash] ✅ Commands registered.");
+  } catch (err) { console.error("[Slash] ❌ Failed:", err.message); }
+}
+
+// ── Post command reference list ───────────────────────────────
+async function postCommandsList(guild) {
+  const ch = findChannel(guild, "helena-command-list");
+  if (!ch) { console.warn("[Commands] #helena-command-list not found — skipping."); return; }
+  try {
+    const msgs = await ch.messages.fetch({ limit: 20 });
+    for (const m of msgs.filter(m => m.author.id === client.user.id).values()) await m.delete().catch(() => {});
+  } catch {}
+  const serverList = SERVERS.map(s => `\`${s.name}\``).join(", ");
+  await ch.send({
+    embeds: [
+      new EmbedBuilder()
+        .setTitle("🤖  Helena — Admin Command Reference")
+        .setColor(0x5865f2)
+        .setDescription("All commands below are **admin role only**.\nType `/` in any channel to open the command menu.\n─────────────────────────────────────────")
+        .addFields(
+          { name: "📢  Announcements", value: "**`/announce`** — Post to a Discord channel.\n**`/broadcast`** — In-game RCON broadcast.\n**`/server-message`** — In-game chat message." },
+          { name: "⚠️  Player Management", value: "**`/warn`** — Issue a warning (logged + in-game notify).\n**`/kick`** — Kick via RCON.\n**`/ban`** — Ban via RCON.\n**`/unban`** — Unban via RCON.\n**`/player-history`** — View warnings & bans." },
+          { name: "🔧  Server Tools", value: "**`/server-save`** — Force-save an ARK world via RCON." },
+          { name: "🗺️  Available Servers", value: serverList },
+          { name: "🤖  AI Commands", value: "`!ai on` — Enable AI in current channel (admin only)\n`!ai off` — Disable AI in current channel (admin only)\n`!ai help` — Show capabilities\n\nThe **#🤖︱ai** channel is always active for everyone." },
+        )
+        .setFooter({ text: "Helena — Skii's Lodge Admin Bot  •  All actions are logged automatically" })
+        .setTimestamp(),
+    ],
+  });
+  console.log("[Commands] ✅ Posted to #helena-command-list.");
+}
+
+// ── BattleMetrics ─────────────────────────────────────────────
+async function fetchServerStatus(bmId) {
+  try {
+    const res = await fetch(`https://api.battlemetrics.com/servers/${bmId}`);
+    if (!res.ok) return null;
+    const { data: { attributes: a } } = await res.json();
+    return { online: a.status === "online", players: a.players, maxPlayers: a.maxPlayers };
+  } catch { return null; }
+}
+
+async function discoverMissingServers() {
+  if (!SERVERS.some(s => !s.bm_id)) return;
+  try {
+    const res  = await fetch("https://api.battlemetrics.com/servers?filter[game]=arksa&filter[search]=Skii%27s+PVE&page[size]=25");
+    if (!res.ok) return;
+    const json = await res.json();
+    for (const result of json.data) {
+      const bmName = result.attributes.name.toLowerCase();
+      for (const s of SERVERS) {
+        if (s.bm_id) continue;
+        if (bmName.replace(/\s/g, "").includes(s.name.toLowerCase().replace(" ", ""))) {
+          s.bm_id = result.id;
+          console.log(`[Discovery] ${s.name} → ${result.id}`);
+          break;
+        }
+      }
+    }
+  } catch (err) { console.error("[Discovery]", err.message); }
+}
+
+function playerBar(p, m, l = 10) {
+  if (!m) return "";
+  return "█".repeat(Math.round((p / m) * l)) + "░".repeat(l - Math.round((p / m) * l));
+}
+
+function buildStatusEmbed(results) {
+  const online = results.filter(r => r.data?.online).length;
+  const lines  = results.map(({ server: s, data: d }) =>
+    !d ? `⚫  **${s.name}** — unavailable` :
+    !d.online ? `🔴  **${s.name}** — offline` :
+    `🟢  **${s.name}**  •  \`${d.players}/${d.maxPlayers}\`  ${playerBar(d.players, d.maxPlayers)}`
+  );
+  return new EmbedBuilder()
+    .setTitle("🦕  Skii's Lodge — Live Server Status")
+    .setColor(0x1ec864)
+    .setDescription(`**${online}/${results.length}** servers online\n──────────────────────────────\n${lines.join("\n")}`)
+    .setFooter({ text: "Updates every 5 minutes  •  BattleMetrics" })
+    .setTimestamp();
+}
+
+async function pollServers() {
+  const guild = client.guilds.cache.get(GUILD_ID);
+  if (!guild) return;
+  const results = await Promise.all(SERVERS.map(async s => ({ server: s, data: s.bm_id ? await fetchServerStatus(s.bm_id) : null })));
+
+  for (const { server: s, data } of results) {
+    const newName = !data ? `⚫︱${s.name}` : !data.online ? `🔴︱${s.name}` : `🟢︱${s.name} - ${data.players}/${data.maxPlayers}`;
+    if (newName !== lastKnown[s.name]) {
+      lastKnown[s.name] = newName;
+      if (s.channel_id) {
+        try {
+          const ch = guild.channels.cache.get(s.channel_id);
+          if (ch && ch.name !== newName) { await ch.setName(newName); await sleep(1500); }
+        } catch {}
+      }
+    }
+  }
+
+  const statusCh = guild.channels.cache.get(CHANNEL_IDS.statusEmbed);
+  if (!statusCh) return;
+  const embed = buildStatusEmbed(results);
+  if (statusMessageId) {
+    try { const m = await statusCh.messages.fetch(statusMessageId); await m.edit({ embeds: [embed] }); return; }
+    catch { statusMessageId = null; }
+  }
+  const m = await statusCh.send({ embeds: [embed] });
+  statusMessageId = m.id;
+}
+
+// ── Ticket system ─────────────────────────────────────────────
+async function initTicketCounter(guild) {
+  const existing = guild.channels.cache
+    .filter(c => /ticket-\d+/i.test(c.name))
+    .map(c => parseInt(c.name.replace(/\D/g, ""), 10))
+    .filter(n => !isNaN(n));
+  ticketCounter = existing.length > 0 ? Math.max(...existing) : 0;
+  console.log(`[Tickets] Counter initialized at ${ticketCounter}`);
+}
+
+async function postTicketPanel(guild) {
+  const ch = guild.channels.cache.get(CHANNEL_IDS.supportTicket);
+  if (!ch) { console.warn("[Tickets] #support-ticket not found."); return; }
+  try {
+    const msgs = await ch.messages.fetch({ limit: 20 });
+    for (const m of msgs.filter(m => m.author.id === client.user.id).values()) await m.delete().catch(() => {});
+  } catch {}
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId("create_ticket").setLabel("📩  Open a Ticket").setStyle(ButtonStyle.Primary)
+  );
+  await ch.send({
+    embeds: [
+      new EmbedBuilder()
+        .setTitle("🎫  Support — Skii's Lodge")
+        .setColor(0x5865f2)
+        .setDescription("Need help? Click the button below to open a private support ticket.\n\n**Use tickets for:**\n• Rule violations or reports\n• Bugs or technical issues\n• Ban appeals\n• General questions for staff\n\n*A private channel will be created just for you and our team.*")
+        .setFooter({ text: "Skii's Lodge  •  Staff will respond as soon as possible" }),
+    ],
+    components: [row],
+  });
+  console.log("[Tickets] ✅ Panel posted to #support-ticket.");
+}
+
+async function createTicket(interaction) {
+  const guild  = interaction.guild;
+  const member = interaction.member;
+  const existing = guild.channels.cache.find(c => openTickets.has(c.id) && openTickets.get(c.id).userId === member.id);
+  if (existing) return interaction.reply({ content: `❌ You already have an open ticket: <#${existing.id}>`, ephemeral: true });
+
+  ticketCounter++;
+  const ticketNum = String(ticketCounter).padStart(4, "0");
+  const chanName  = `🎫︱ticket-${ticketNum}`;
+
+  let category = guild.channels.cache.get("1390284215870033971"); // Open Tickets category ID
+  if (!category) category = guild.channels.cache.find(c => c.type === ChannelType.GuildCategory && c.name.toLowerCase().includes("open ticket"));
+  if (!category) category = await guild.channels.create({ name: "📂 Open Tickets", type: ChannelType.GuildCategory });
+
+  const perms = [
+    { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+    { id: member.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+  ];
+  if (ROLES.staff) perms.push({ id: ROLES.staff, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] });
+  if (ROLES.admin) perms.push({ id: ROLES.admin, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] });
+
+  const ticketCh = await guild.channels.create({
+    name: chanName,
+    type: ChannelType.GuildText,
+    parent: category.id,
+    permissionOverwrites: perms,
+    topic: `Ticket #${ticketNum} — opened by ${member.user.tag}`,
+  });
+
+  openTickets.set(ticketCh.id, { userId: member.id, ticketNum });
+
+  const closeRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId("close_ticket").setLabel("🔒  Close Ticket").setStyle(ButtonStyle.Danger)
+  );
+
+  await ticketCh.send({
+    content: `<@${member.id}>`,
+    embeds: [
+      new EmbedBuilder()
+        .setTitle(`🎫  Ticket #${ticketNum}`)
+        .setColor(0x5865f2)
+        .setDescription(`Welcome <@${member.id}>! Staff will be with you shortly.\n\nPlease describe your issue in detail.\nWhen resolved, click **Close Ticket** below.`)
+        .setTimestamp(),
+    ],
+    components: [closeRow],
+  });
+
+  await interaction.reply({ content: `✅ Ticket opened: <#${ticketCh.id}>`, ephemeral: true });
+
+  // Delete the trigger message in #support-ticket
+  if (interaction.message) await interaction.message.delete().catch(() => {});
+
+  await logAction(guild, 0x5865f2, "🎫 Ticket Opened", [
+    { name: "User",    value: `<@${member.id}>`,  inline: true },
+    { name: "Ticket",  value: `#${ticketNum}`,    inline: true },
+    { name: "Channel", value: `<#${ticketCh.id}>`, inline: true },
+  ]);
+}
+
+async function closeTicket(interaction) {
+  const guild  = interaction.guild;
+  const ch     = interaction.channel;
+  const closer = interaction.member;
+  const info   = openTickets.get(ch.id);
+  const ticketNum = info ? info.ticketNum : ch.name.replace(/\D/g, "").padStart(4, "0");
+
+  let transcript = `Ticket #${ticketNum} — Closed by ${closer.user.tag}\nDate: ${new Date().toISOString()}\n${"─".repeat(60)}\n`;
+  try {
+    const msgs   = await ch.messages.fetch({ limit: 100 });
+    const sorted = [...msgs.values()].reverse();
+    for (const m of sorted) transcript += `[${m.createdAt.toISOString().slice(0, 16)}] ${m.author.tag}: ${m.content}\n`;
+  } catch {}
+
+  const transcriptsCh = guild.channels.cache.get(CHANNEL_IDS.ticketTranscript);
+  if (transcriptsCh) {
+    await transcriptsCh.send({
+      embeds: [
+        new EmbedBuilder()
+          .setTitle(`📁 Ticket #${ticketNum} — Transcript`)
+          .setColor(0xff6b00)
+          .addFields(
+            { name: "Closed by", value: closer.user.tag,                        inline: true },
+            { name: "User",      value: info ? `<@${info.userId}>` : "unknown", inline: true },
+            { name: "Date",      value: new Date().toISOString().slice(0, 10),  inline: true }
+          ).setTimestamp(),
+      ],
+      files: [new AttachmentBuilder(Buffer.from(transcript, "utf-8"), { name: `ticket-${ticketNum}.txt` })],
+    });
+  }
+
+  await interaction.reply({ content: `🔒 Closing ticket #${ticketNum}...` });
+  openTickets.delete(ch.id);
+  try {
+    if (info) await ch.permissionOverwrites.delete(info.userId).catch(() => {});
+    await ch.setName(`🔒︱closed-${ticketNum}`);
+  } catch {}
+
+  await logAction(guild, 0xff6b00, "🔒 Ticket Closed", [
+    { name: "Closed by", value: closer.user.tag, inline: true },
+    { name: "Ticket",    value: `#${ticketNum}`,  inline: true },
+  ]);
+}
+
+// ── Get-Roles panel ───────────────────────────────────────────
+async function postRolePanel(guild) {
+  const ch = guild.channels.cache.get(CHANNEL_IDS.getRoles);
+  if (!ch) { console.warn("[Roles] #get-roles not found."); return; }
+  try {
+    const msgs = await ch.messages.fetch({ limit: 20 });
+    const bot  = msgs.filter(m => m.author.id === client.user.id && m.components?.length > 0);
+    if (bot.size > 0) { console.log("[Roles] ℹ️ Role panel already posted."); return; }
+  } catch {}
+
+  const mapRow = new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId("select_map_role")
+      .setPlaceholder("🗺️ Choose your preferred map(s)")
+      .setMinValues(1)
+      .setMaxValues(Math.min(SERVERS.length, 25))
+      .addOptions(SERVERS.map(s => ({ label: s.name, value: s.name.toLowerCase().replace(/\s/g, "_") })))
+  );
+
+  const platformRow = new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId("select_platform_role")
+      .setPlaceholder("🎮 Choose your platform")
+      .setMinValues(1)
+      .setMaxValues(Math.min(PLATFORMS.length, 25))
+      .addOptions(PLATFORMS.map(p => ({ label: `${p.emoji} ${p.name}`, value: p.roleId })))
+  );
+
+  await ch.send({
+    embeds: [
+      new EmbedBuilder()
+        .setTitle("🎭  Get Your Roles")
+        .setColor(0x7B2FBE)
+        .setDescription("Select your platform and favourite maps below to unlock the right channels and get pinged for relevant events!")
+        .setFooter({ text: "Skii's Lodge — role assignment" }),
+    ],
+    components: [platformRow],
+  });
+  console.log("[Roles] ✅ Role panel posted.");
+}
+
+// ── AI helpers ────────────────────────────────────────────────
+function resetAiTimer(channelId, guild) {
+  const state = channelAI.get(channelId);
+  if (!state) return;
+  if (state.timer) clearTimeout(state.timer);
+  state.timer = setTimeout(async () => {
+    state.enabled = false; state.timer = null; state.history = [];
+    const ch = guild.channels.cache.get(channelId);
+    if (ch) await ch.send("⏰ Helena AI went offline due to **10 minutes of inactivity**. An admin can use `!ai on` to re-enable.").catch(() => {});
+  }, AI_TIMEOUT_MS);
+}
+
+async function getAiResponse(channelId, userMessage, username) {
+  if (!anthropic) return "⚠️ AI not configured — `ANTHROPIC_API_KEY` missing.";
+  if (!channelAI.has(channelId)) channelAI.set(channelId, { enabled: false, timer: null, history: [] });
+  const state = channelAI.get(channelId);
+  state.history.push({ role: "user", content: `${username}: ${userMessage}` });
+  if (state.history.length > 20) state.history.splice(0, 2);
+  try {
+    const msg = await anthropic.messages.create({
+      model: "claude-opus-4-5",
+      max_tokens: 1024,
+      system: `You are Helena Walker, the AI assistant for Skii's Lodge — an ARK: Survival Ascended cluster. You are warm, knowledgeable, and speak naturally. Deep expertise in taming, breeding, mutations, base building, all 13 cluster maps (Island, Center, Scorched, Aberration, Astraeos, Extinction, Ragnarok, Valguero, Lost Colony, Club Ark, Forglar, Svartlfheim, Volcano), boss fights, and server management. Server rates: 2.5x taming/harvest/XP, 10x maturation, 20x egg hatch, 10x imprint. Admins: Skidogg, iNFAMOUS, Remi, Captain Rhynio. Keep responses concise and conversational.`,
+      messages: state.history,
+    });
+    const reply = msg.content[0].text;
+    state.history.push({ role: "assistant", content: reply });
+    return reply;
+  } catch (err) { return `❌ AI error: ${err.message}`; }
+}
+
+// ── Online announcement ───────────────────────────────────────
+async function postOnlineMessage(guild) {
+  const targets = [
+    { id: CHANNEL_IDS.adminConsole, name: "#admin-console" },
+    { id: CHANNEL_IDS.staffChat,    name: "#staff-chat" },
+  ];
+  for (const { id, name } of targets) {
+    const ch = guild.channels.cache.get(id);
+    if (!ch) { console.error(`❌ Could not find ${name}`); continue; }
+    await ch.send({
+      embeds: [
+        new EmbedBuilder()
+          .setTitle("🟢  HELENA IS ONLINE")
+          .setColor(0x2ECC71)
+          .setDescription(
+            `Systems are up and I am ready to go.\n\n` +
+            `🤖 **AI Brain:** ${anthropic ? "✅ Active" : "❌ Disabled"}\n` +
+            `🕐 **Started:** <t:${Math.floor(Date.now() / 1000)}:F>\n\n` +
+            `*Talk to me naturally — polls, config changes, server info, player questions.*`
+          )
+          .setFooter({ text: "Helena Walker — Skii's Lodge" }),
+      ],
+    }).catch(err => console.error(`❌ Online msg to ${name}: ${err.message}`));
+    console.log(`✅ Online message → ${name}`);
+  }
+}
+
+// ── READY ─────────────────────────────────────────────────────
+client.once("clientReady", async () => {
   console.log(`✅ Helena is online as ${client.user.tag}`);
   const guild = client.guilds.cache.get(GUILD_ID);
-  if (!guild) return console.error('❌ Guild not found.');
-  await createRoles(guild);
-  await new Promise(r => setTimeout(r, 2000));
-  await postRoleEmbeds(guild);
+  if (!guild) { console.error("❌ Guild not found."); process.exit(1); }
+
+  await discoverMissingServers();
+  await registerSlashCommands();
+  await initTicketCounter(guild);
   await postTicketPanel(guild);
+  await postRolePanel(guild);
+  await postCommandsList(guild);
   await postOnlineMessage(guild);
-  console.log('✅ Helena v2.0.0 setup complete!');
+  await pollServers();
+  setInterval(pollServers, UPDATE_INTERVAL_MINUTES * 60 * 1000);
+
+  console.log("✅ Helena v2.1.0 setup complete!");
 });
 
-// ── Interaction handler ───────────────────────────────────────────────────────
-client.on('interactionCreate', async (interaction) => {
+// ── INTERACTIONS ──────────────────────────────────────────────
+client.on("interactionCreate", async (interaction) => {
 
-  // Map roles
-  if (interaction.isStringSelectMenu() && interaction.customId === 'map_roles') {
-    await interaction.deferReply({ ephemeral: true });
-    const { guild, member } = interaction;
-    for (const map of MAPS) {
-      const role = guild.roles.cache.find(r => r.name === map.name);
-      if (role && member.roles.cache.has(role.id)) await member.roles.remove(role).catch(() => {});
+  // ── Buttons ───────────────────────────────────────────────
+  if (interaction.isButton()) {
+    if (interaction.customId === "create_ticket") return createTicket(interaction);
+    if (interaction.customId === "close_ticket")  return closeTicket(interaction);
+    return;
+  }
+
+  // ── Select menus (role assignment) ───────────────────────
+  if (interaction.isStringSelectMenu()) {
+    if (interaction.customId === "select_platform_role") {
+      try {
+        const member = interaction.member;
+        // Remove existing platform roles first
+        for (const p of PLATFORMS) {
+          if (member.roles.cache.has(p.roleId)) await member.roles.remove(p.roleId).catch(() => {});
+        }
+        // Add selected roles
+        for (const roleId of interaction.values) {
+          await member.roles.add(roleId).catch(() => {});
+        }
+        const names = PLATFORMS.filter(p => interaction.values.includes(p.roleId)).map(p => `${p.emoji} ${p.name}`).join(", ");
+        await interaction.reply({ content: `✅ Platform roles updated: **${names}**`, ephemeral: true });
+      } catch (err) {
+        await interaction.reply({ content: `❌ Could not assign roles: ${err.message}`, ephemeral: true });
+      }
+      return;
     }
-    const added = [];
-    for (const val of interaction.values) {
-      const role = guild.roles.cache.find(r => r.name === val);
-      if (role) { await member.roles.add(role).catch(() => {}); added.push(val); }
-    }
-    await interaction.editReply({ content: `✅ Map roles updated!\n🗺️ **Active Maps:** ${added.join(', ')}` });
+    return;
   }
 
-  // Platform roles
-  if (interaction.isStringSelectMenu() && interaction.customId === 'platform_roles') {
-    await interaction.deferReply({ ephemeral: true });
-    const { guild, member } = interaction;
-    for (const p of PLATFORMS) {
-      const role = guild.roles.cache.get(p.roleId);
-      if (role && member.roles.cache.has(role.id)) await member.roles.remove(role).catch(() => {});
-    }
-    const platform = PLATFORMS.find(p => p.name === interaction.values[0]);
-    const role     = platform ? guild.roles.cache.get(platform.roleId) : null;
-    if (role) await member.roles.add(role).catch(() => {});
-    await interaction.editReply({ content: `✅ Platform updated!\n${platform?.emoji || '🎮'} **Platform:** ${interaction.values[0]}` });
+  // ── Slash commands ────────────────────────────────────────
+  if (!interaction.isChatInputCommand()) return;
+
+  if (!isAdmin(interaction.member)) {
+    return interaction.reply({ content: "❌ Helena commands are restricted to the **Admin** role only.", ephemeral: true });
   }
 
-  // Ticket open buttons
-  if (interaction.isButton() && interaction.customId.startsWith('open_ticket_')) {
-    const key = interaction.customId.replace('open_ticket_', '');
-    const cat = TICKET_CATEGORIES.find(c => c.key === key);
-    if (!cat) return interaction.reply({ content: '❌ Unknown ticket category.', ephemeral: true });
+  await interaction.deferReply({ ephemeral: true });
 
-    const { guild, member } = interaction;
-    const existing = guild.channels.cache.find(c => c.name.startsWith(`open-${member.user.username.toLowerCase()}`));
-    if (existing) return interaction.reply({ content: `⚠️ You already have an open ticket in <#${existing.id}>!`, ephemeral: true });
-
-    await interaction.deferReply({ ephemeral: true });
-    const result = await createTicketChannel(guild, member, cat);
-
-    if (result.channel) {
-      conversationHistory[result.channel.id] = [
-        { role: 'user', content: `[${member.displayName}]: I need help with ${cat.name}` }
-      ];
-      const fakeMsg = { channel: result.channel, member, content: `I need help with ${cat.name}`, author: interaction.user };
-      await handleTicketMessage(fakeMsg, guild, true);
-      await interaction.editReply({ content: `✅ Ticket opened! Head to <#${result.channel.id}> — Helena is already there. 🦖` });
-    }
-  }
-
-  // Close ticket
-  if (interaction.isButton() && interaction.customId === 'ticket_close') {
-    await interaction.deferReply({ ephemeral: false });
-    const channel = interaction.channel;
-    const member  = interaction.member;
-    await channel.setName(channel.name.replace('open-', 'closed-').replace('ticket-', 'closed-')).catch(() => {});
-    await channel.permissionOverwrites.edit(member.id, { SendMessages: false }).catch(() => {});
-    escalatedTickets.delete(channel.id);
-    delete conversationHistory[channel.id];
-
-    const closedEmbed = new EmbedBuilder()
-      .setTitle('🔒  TICKET CLOSED')
-      .setDescription(`This ticket has been closed by ${member}.\n\n🕐 **Closed:** <t:${Math.floor(Date.now() / 1000)}:F>\n\n*An admin can delete this channel once the issue is resolved.*`)
-      .setColor(COLORS.red).setFooter({ text: 'Helena • Support Ticket — CLOSED' }).setTimestamp();
-
-    const deleteButton = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('ticket_delete').setLabel('Delete Ticket').setEmoji('🗑️').setStyle(ButtonStyle.Danger)
-    );
-    await interaction.editReply({ embeds: [closedEmbed], components: [deleteButton] });
-    await sendMessage(ADMIN_LOGS_CHANNEL_ID, `🔒 **[Ticket Closed]** <#${channel.id}> by <@${member.id}>`);
-  }
-
-  // Delete ticket (admin only)
-  if (interaction.isButton() && interaction.customId === 'ticket_delete') {
-    const isAdmin = interaction.member.roles.cache.has(ADMIN_ROLE_ID) || interaction.member.roles.cache.has(ARK_ADMIN_ROLE_ID);
-    if (!isAdmin) return interaction.reply({ content: '🚫 Only admins can delete ticket channels.', ephemeral: true });
-    await interaction.reply({ content: '🗑️ Deleting in 3 seconds...', ephemeral: true });
-    setTimeout(() => interaction.channel.delete().catch(() => {}), 3000);
-  }
-});
-
-// ── Message handler ───────────────────────────────────────────────────────────
-client.on('messageCreate', async (message) => {
   try {
-    if (message.author.bot) return;
-    const guild = message.guild;
-    if (!guild) return;
-
-    // Ensure member is fully fetched
-    let member = message.member;
-    if (!member) {
-      try { member = await guild.members.fetch(message.author.id); } catch { return; }
+    switch (interaction.commandName) {
+      case "announce":       await handleAnnounce(interaction);      break;
+      case "broadcast":      await handleBroadcast(interaction);     break;
+      case "warn":           await handleWarn(interaction);          break;
+      case "kick":           await handleKick(interaction);          break;
+      case "ban":            await handleBan(interaction);           break;
+      case "unban":          await handleUnban(interaction);         break;
+      case "player-history": await handlePlayerHistory(interaction); break;
+      case "server-save":    await handleServerSave(interaction);    break;
+      case "server-message": await handleServerMessage(interaction); break;
+      default: await interaction.editReply({ content: "Unknown command." });
     }
-
-    const channelId   = message.channel.id;
-    const channelName = message.channel.name;
-    console.log(`📨 [#${channelName}] ${member.displayName}: "${message.content.substring(0, 60)}"`);
-
-    // #admin-console or #staff-chat — admin AI brain
-    if (channelId === ADMIN_CONSOLE_CHANNEL_ID || channelId === STAFF_CHAT_CHANNEL_ID) {
-      console.log(`🧠 Helena triggered in #${channelName}`);
-      const adminCheck = await isAdminMember(guild, message.author.id);
-      if (!adminCheck) { console.log(`🚫 Non-admin blocked in #${channelName}`); return; }
-      await handleHelenaMessage(message, guild);
-      return;
-    }
-
-    // open-* ticket channels — Helena responds to players, stays quiet for admins post-escalation
-    if (channelName.startsWith('open-')) {
-      console.log(`🎫 Message in ticket #${channelName}`);
-      const adminCheck = await isAdminMember(guild, message.author.id);
-      if (adminCheck) { console.log(`🛡️ Admin in ticket — Helena standing by.`); return; }
-      await handleTicketMessage(message, guild, false);
-      return;
-    }
-
-    // #support-ticket — auto ticket creation + message forwarding
-    if (channelId === SUPPORT_TRIGGER_CHANNEL_ID) {
-      console.log(`🎟️ Player typed in #support-ticket — creating ticket for ${member.displayName}`);
-      const originalContent = message.content;
-
-      deleteMessage(channelId, message.id).catch(() => {});
-
-      const existingChannel = guild.channels.cache.find(
-        c => c.name.startsWith(`open-${message.author.username.toLowerCase()}`)
-      );
-
-      if (existingChannel) {
-        console.log(`📂 Existing ticket found — forwarding.`);
-        await existingChannel.send({
-          embeds: [new EmbedBuilder()
-            .setDescription(`📨 **${member.displayName}** sent a new message:\n\n${originalContent}`)
-            .setColor(COLORS.orange).setFooter({ text: 'Helena • Forwarded Message' }).setTimestamp()],
-        });
-        conversationHistory[existingChannel.id] = conversationHistory[existingChannel.id] || [];
-        conversationHistory[existingChannel.id].push({ role: 'user', content: `[${member.displayName}]: ${originalContent}` });
-        const fakeMsg = { channel: existingChannel, member, content: originalContent, author: message.author };
-        await handleTicketMessage(fakeMsg, guild, false);
-        return;
-      }
-
-      const result = await createTicketChannel(guild, member, TICKET_CATEGORIES[0], originalContent);
-      if (result.channel) {
-        console.log(`✅ New ticket: #${result.channel.name}`);
-        conversationHistory[result.channel.id] = [
-          { role: 'user', content: `[${member.displayName}]: ${originalContent}` }
-        ];
-        const fakeMsg = { channel: result.channel, member, content: originalContent, author: message.author };
-        await handleTicketMessage(fakeMsg, guild, true);
-        await sendMessage(channelId, `🎫 <@${member.user.id}> — your ticket is open! Head to <#${result.channel.id}> 🦕`);
-      }
-      return;
-    }
-
-    // #ai channel — !ai prefix only, forward to ArkBot webhook
-    if (channelId === AI_CHANNEL_ID) {
-      if (!message.content.trim().toLowerCase().startsWith('!ai')) return;
-      await forwardToWebhook({
-        type: 'message', id: message.id, channel_id: channelId, channel_name: channelName,
-        content: message.content,
-        author: { id: message.author.id, username: message.author.username, global_name: message.author.globalName, bot: false },
-      });
-      return;
-    }
-
-    // All other channels — silent
-
   } catch (err) {
-    console.error('❌ Unhandled error in messageCreate:', err.message);
+    console.error(`[Command] /${interaction.commandName}:`, err.message);
+    await interaction.editReply({ content: `❌ Something went wrong: ${err.message}` }).catch(() => {});
   }
 });
 
-// ── Member join ───────────────────────────────────────────────────────────────
-client.on('guildMemberAdd', async (member) => {
-  console.log(`👋 New member: ${member.user.username}`);
-  await forwardToWebhook({
-    type: 'member_join',
-    user: { id: member.user.id, username: member.user.username, global_name: member.user.globalName },
-  });
+// ── MESSAGES ──────────────────────────────────────────────────
+client.on("messageCreate", async (message) => {
+  if (message.author.bot) return;
+
+  const guild   = message.guild;
+  const content = message.content.trim();
+  const chId    = message.channel.id;
+  const lower   = content.toLowerCase();
+
+  // Log all monitored channel messages
+  const monitoredChannels = [CHANNEL_IDS.adminConsole, CHANNEL_IDS.staffChat, CHANNEL_IDS.ai];
+  if (monitoredChannels.includes(chId)) {
+    console.log(`📨 [#${message.channel.name}] ${message.member?.displayName || message.author.username}: "${content.slice(0, 80)}"`);
+  }
+
+  // ── !ai commands ──────────────────────────────────────────
+  if (lower === "!ai on" || lower === "!ai off") {
+    if (!isAdmin(message.member)) return message.reply("❌ Only admins can toggle Helena AI.");
+    if (lower === "!ai on") {
+      if (!channelAI.has(chId)) channelAI.set(chId, { enabled: false, timer: null, history: [] });
+      const state = channelAI.get(chId);
+      state.enabled = true; state.history = [];
+      resetAiTimer(chId, guild);
+      await message.reply("🟢 **Helena AI is now active in this channel.**\n*Auto-shuts off after 10 minutes of inactivity.*");
+    } else {
+      const state = channelAI.get(chId);
+      if (state) { if (state.timer) clearTimeout(state.timer); state.enabled = false; state.timer = null; state.history = []; }
+      await message.reply("🔴 **Helena AI is now offline in this channel.**");
+    }
+    return;
+  }
+
+  if (lower === "!ai help") {
+    await message.reply([
+      "**🤖 Helena — Capabilities**",
+      "",
+      "**Server Info**",
+      "• Server rates, rules, maps, wipe schedule",
+      "• Cluster info, admin contacts, mod list",
+      "",
+      "**Game Knowledge**",
+      "• Taming: food, torpor, effectiveness for any creature",
+      "• Breeding: imprinting, mutations, stat inheritance, timers",
+      "• All 13 cluster maps, boss fights, engrams, TEK, kibble",
+      "",
+      "**Support Triage**",
+      "• Diagnose bugs and connection issues",
+      "• Escalate critical issues to admins",
+      "• Open support tickets via #support-ticket",
+      "",
+      "**Admin Tools** *(admin role only)*",
+      "• `/announce`, `/broadcast`, `/warn`, `/kick`, `/ban`, `/unban`",
+      "• `/player-history`, `/server-save`, `/server-message`",
+      "• `!ai on/off` — toggle AI in any channel",
+    ].join("\n"));
+    return;
+  }
+
+  if (content.startsWith("!")) return;
+
+  // ── AI response logic ─────────────────────────────────────
+  const isPublicAi = chId === CHANNEL_IDS.ai;
+  const state      = channelAI.get(chId);
+  const isToggled  = state?.enabled === true;
+
+  // Also respond in admin-console and staff-chat if message is a question or ARK-related
+  const isAdminChannel = chId === CHANNEL_IDS.adminConsole || chId === CHANNEL_IDS.staffChat;
+  const isArkRelated   = /\?|tame|breed|mut|imprint|dino|tribe|base|raid|server|map|boss|ark|wipe|rate|kibble|egg|baby|hatch|poll|announce|ban|kick|warn/i.test(content);
+
+  if (!isPublicAi && !isToggled && !(isAdminChannel && isArkRelated)) return;
+
+  if (isToggled && !isPublicAi) resetAiTimer(chId, guild);
+
+  try {
+    await message.channel.sendTyping();
+    const reply = await getAiResponse(chId, message.content, message.author.username);
+    if (reply.length <= 2000) {
+      await message.reply(reply);
+    } else {
+      const chunks = reply.match(/.{1,1990}/gs) || [reply];
+      await message.reply(chunks[0]);
+      for (let i = 1; i < chunks.length; i++) await message.channel.send(chunks[i]);
+    }
+  } catch (err) {
+    console.error("[AI] Error:", err.message);
+    await message.reply("❌ Something went wrong with the AI response.").catch(() => {});
+  }
 });
 
-// ── Error handlers ────────────────────────────────────────────────────────────
-client.on('error', (err) => console.error('❌ Client error:', err.message));
-process.on('unhandledRejection', (r) => console.error('❌ Unhandled rejection:', r));
-process.on('uncaughtException', (err) => console.error('❌ Uncaught exception:', err.message));
-
-// ── Login ─────────────────────────────────────────────────────────────────────
-console.log('🔄 Connecting to Discord...');
-client.login(DISCORD_BOT_TOKEN).catch((err) => { console.error('❌ Login failed:', err.message); process.exit(1); });
+// ── LOGIN ─────────────────────────────────────────────────────
+if (!DISCORD_TOKEN) { console.error("❌ FATAL: DISCORD_BOT_TOKEN not set"); process.exit(1); }
+console.log(`✅ Config OK | AI: ${ANTHROPIC_API_KEY ? "enabled" : "DISABLED"}`);
+console.log("🔄 Connecting to Discord...");
+client.login(DISCORD_TOKEN);
