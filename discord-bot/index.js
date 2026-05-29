@@ -438,7 +438,7 @@ async function executeAction(actionStr, message, guild) {
 
 // ── Role embeds ───────────────────────────────────────────────────────────────
 async function postRoleEmbeds(guild) {
-  const rolesChannel = guild.channels.cache.find(c => c.name === ROLES_CHANNEL_NAME && c.type === ChannelType.GuildText);
+  const rolesChannel = guild.channels.cache.get(ROLES_CHANNEL_ID);
   if (!rolesChannel) return console.error(`❌ Could not find #${ROLES_CHANNEL_NAME}`);
 
   const messages = await rolesChannel.messages.fetch({ limit: 20 });
@@ -459,7 +459,7 @@ async function postRoleEmbeds(guild) {
 
 // ── Ticket panel ──────────────────────────────────────────────────────────────
 async function postTicketPanel(guild) {
-  const ticketChannel = guild.channels.cache.find(c => c.name === SUPPORT_TICKET_CHANNEL_NAME && c.type === ChannelType.GuildText);
+  const ticketChannel = guild.channels.cache.get(SUPPORT_TRIGGER_CHANNEL_ID);
   if (!ticketChannel) return console.error(`❌ Could not find #${SUPPORT_TICKET_CHANNEL_NAME}`);
 
   const messages = await ticketChannel.messages.fetch({ limit: 20 });
@@ -501,8 +501,9 @@ async function postOnlineMessage(guild) {
     [ADMIN_CONSOLE_CHANNEL_NAME, 'Admin Console'],
     [STAFF_CHAT_CHANNEL_NAME,    'Staff Chat'],
   ]) {
-    const channel = guild.channels.cache.find(c => c.name === channelName && c.type === ChannelType.GuildText);
-    if (!channel) { console.error(`❌ Could not find #${channelName}`); continue; }
+    const channelId = channelName === ADMIN_CONSOLE_CHANNEL_NAME ? ADMIN_CONSOLE_CHANNEL_ID : STAFF_CHAT_CHANNEL_ID;
+    const channel = guild.channels.cache.get(channelId);
+    if (!channel) { console.error(`❌ Could not find channel ID ${channelId} (#${channelName})`); continue; }
 
     const isAdmin = label === 'Admin Console';
     const embed = new EmbedBuilder()
@@ -600,7 +601,7 @@ const client = new Client({
   partials: [Partials.Channel, Partials.Message, Partials.Reaction],
 });
 
-client.once('ready', async () => {
+client.once('clientReady', async () => {
   console.log(`✅ Helena is online as ${client.user.tag}`);
   const guild = client.guilds.cache.get(GUILD_ID);
   if (!guild) return console.error('❌ Guild not found.');
@@ -717,7 +718,7 @@ client.on('messageCreate', async (message) => {
     console.log(`📨 [#${channelName}] ${member.displayName}: "${message.content.substring(0, 60)}"`);
 
     // #admin-console or #staff-chat — admin AI brain
-    if (channelName === ADMIN_CONSOLE_CHANNEL_NAME || channelName === STAFF_CHAT_CHANNEL_NAME) {
+    if (channelId === ADMIN_CONSOLE_CHANNEL_ID || channelId === STAFF_CHAT_CHANNEL_ID) {
       console.log(`🧠 Helena triggered in #${channelName}`);
       const adminCheck = await isAdminMember(guild, message.author.id);
       if (!adminCheck) { console.log(`🚫 Non-admin blocked in #${channelName}`); return; }
