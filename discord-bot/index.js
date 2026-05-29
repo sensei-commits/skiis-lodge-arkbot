@@ -377,18 +377,18 @@ client.on('messageCreate', async (message) => {
     return;
   }
 
-  // #ai channel — ONLY respond to messages starting with !ai prefix
+  // #ai channel — forward raw content (backend enforces !ai prefix check)
   if (channelId === AI_CHANNEL_ID) {
-    const trimmed = message.content.trim();
-    if (!trimmed.toLowerCase().startsWith(AI_PREFIX)) return; // Ignore anything without !ai
-    const query = trimmed.slice(AI_PREFIX.length).trim();
-    console.log(`📨 [#ai] ${message.author.username}: "${query.substring(0, 80)}"`);
+    const trimmed = message.content.trim().toLowerCase();
+    // Quick gate: if message doesn't start with !ai, drop it here — don't even forward
+    if (!trimmed.startsWith('!ai')) return;
+    console.log(`📨 [#ai] ${message.author.username}: "${message.content.substring(0, 80)}"`);
     await forwardToWebhook({
       type: 'message',
       id: message.id,
       channel_id: channelId,
       channel_name: message.channel.name,
-      content: query, // Strip the prefix before forwarding
+      content: message.content, // Forward raw — backend strips prefix
       author: {
         id: message.author.id,
         username: message.author.username,
@@ -399,8 +399,7 @@ client.on('messageCreate', async (message) => {
     return;
   }
 
-  // #ark-general and all other channels — BLACKLISTED, bot is completely silent
-  // No logging, no responding, no nothing.
+  // All other channels — completely silent (blacklisted)
 });
 
 // ── Member join ───────────────────────────────────────────────────────────────
