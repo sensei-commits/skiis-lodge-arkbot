@@ -25,8 +25,8 @@ const ROLES_CHANNEL_ID           = '1509816508291878972'; // #🎭︱get-roles
 const ADMIN_CONSOLE_CHANNEL_ID   = '1509762780192837675'; // #🛠️・admin-console
 const STAFF_CHAT_CHANNEL_ID      = '1509816635765293067'; // #🦑︱staff-chat
 const POLLS_CHANNEL_ID           = '1509816572322250852'; // #🗳️︱ark-polls
-const ADMIN_ROLE_ID              = '1242319080760467557';
-const ARK_ADMIN_ROLE_ID          = '1242319323145166848';
+const ADMIN_ROLE_ID              = '703389459747700807';  // Admin ⭐
+const ARK_ADMIN_ROLE_ID          = '703397175538876428';  // ARK Admin's⭐
 const BOT_USER_ID                = '1507730299356708984';
 
 // ── Channel name constants (used for name-based lookups) ──────────────────────
