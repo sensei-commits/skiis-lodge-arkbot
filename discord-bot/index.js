@@ -19,8 +19,8 @@ const BATTLEMETRICS_ORG_ID  = process.env.BATTLEMETRICS_ORG_ID  || '';
 const GUILD_ID                   = '636832636752625664';
 const OPEN_TICKETS_CATEGORY_ID   = '1390284215870033971';
 const ADMIN_LOGS_CHANNEL_ID      = '1275132184440868866';
-const AI_CHANNEL_ID              = '1509173477725175928'; // #🤖・ai
-const SUPPORT_TRIGGER_CHANNEL_ID = '1390284806650331146'; // #🎫︱support-ticket
+const AI_CHANNEL_ID              = '1509816601334124614'; // #🤖︱ai
+const SUPPORT_TRIGGER_CHANNEL_ID = '1509816628542570609'; // #🎫︱support-ticket // #🎫︱support-ticket
 const ROLES_CHANNEL_ID           = '1509816508291878972'; // #🎭︱get-roles
 const ADMIN_CONSOLE_CHANNEL_ID   = '1509762780192837675'; // #🛠️・admin-console
 const STAFF_CHAT_CHANNEL_ID      = '1509816635765293067'; // #🦑︱staff-chat
@@ -35,7 +35,7 @@ const ROLES_CHANNEL_NAME          = 'get-roles';
 const ADMIN_CONSOLE_CHANNEL_NAME  = 'admin-console';
 const STAFF_CHAT_CHANNEL_NAME     = 'staff-chat';
 const POLLS_CHANNEL_NAME          = 'ark-polls';
-const ADMIN_ROLE_NAME             = 'Admin';
+const ADMIN_ROLE_NAME             = 'Admin ⭐';
 
 // ── Colors ────────────────────────────────────────────────────────────────────
 const COLORS = {
@@ -157,13 +157,15 @@ async function forwardToWebhook(payload) {
 // ── Helper: check if member is admin ─────────────────────────────────────────
 async function isAdminMember(guild, userId) {
   try {
+    const member = await guild.members.fetch(userId);
+    // ID-based check first — fast and reliable
+    if (member.roles.cache.has(ADMIN_ROLE_ID) || member.roles.cache.has(ARK_ADMIN_ROLE_ID)) return true;
+    // Name-based fallback
     await guild.roles.fetch();
-    const member    = await guild.members.fetch(userId);
     const adminRole = guild.roles.cache.find(r => r.name.toLowerCase() === ADMIN_ROLE_NAME.toLowerCase());
-    if (!adminRole) { console.warn('⚠️ Admin role not found — allowing response'); return false; }
-    return member.roles.cache.has(adminRole.id) ||
-           member.roles.cache.has(ADMIN_ROLE_ID) ||
-           member.roles.cache.has(ARK_ADMIN_ROLE_ID);
+    if (adminRole && member.roles.cache.has(adminRole.id)) return true;
+    console.log(`ℹ️ ${member.displayName} is not an admin`);
+    return false;
   } catch (err) { console.error('❌ isAdminMember error:', err.message); return false; }
 }
 
