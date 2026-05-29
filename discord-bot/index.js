@@ -33,6 +33,7 @@ const GUILD_ID          = "636832636752625664";
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const WEBHOOK_URL       = process.env.ARKBOT_WEBHOOK_URL;
 const WEBHOOK_SECRET    = process.env.DISCORD_WEBHOOK_SECRET;
+const DYNAMIC_CONFIG_URL = "https://skiilodge.asa-bot.info/api/dynamicConfig/server/898e4691-fbac-4e87-9c50-340dff4167f6/63d2bd1d-a52e-4606-9869-7fd363dfc599";
 
 const UPDATE_INTERVAL_MINUTES = 5;
 
@@ -524,6 +525,41 @@ function buildStatusEmbed(results) {
     .setTimestamp();
 }
 
+
+// ── Dynamic server rates (live from ASA-Bot API) ──────────────
+let cachedRates = null;
+let ratesCachedAt = 0;
+const RATES_CACHE_MS = 5 * 60 * 1000; // cache for 5 minutes
+
+async function fetchDynamicConfig() {
+  if (cachedRates && Date.now() - ratesCachedAt < RATES_CACHE_MS) return cachedRates;
+  try {
+    const res  = await fetch(DYNAMIC_CONFIG_URL);
+    if (!res.ok) return null;
+    const data = await res.json();
+    cachedRates  = data;
+    ratesCachedAt = Date.now();
+    return data;
+  } catch (err) { console.error("[Rates] Failed to fetch config:", err.message); return null; }
+}
+
+function formatRates(cfg) {
+  if (!cfg) return "*(rates unavailable — API unreachable)*";
+  const get = (key, fallback) => cfg[key] ?? fallback;
+  return [
+    `🥩 **Taming Speed:** ${get("TamingSpeedMultiplier", "?")}x`,
+    `⛏️ **Harvesting:** ${get("HarvestAmountMultiplier", get("HarvestAmountMultiplie", "?"))}x`,
+    `⭐ **XP:** ${get("XPMultiplier", "?")}x`,
+    `🥚 **Egg Hatch Speed:** ${get("EggHatchSpeedMultiplier", "?")}x`,
+    `🍼 **Baby Mature Speed:** ${get("BabyMatureSpeedMultiplier", "?")}x`,
+    `💞 **Imprint Amount:** ${get("BabyImprintAmountMultiplier", "?")}x`,
+    `⏰ **Cuddle Interval:** ${get("BabyCuddleIntervalMultiplier", "?")}x`,
+    `🔁 **Mating Interval:** ${get("MatingIntervalMultiplier", "?")}x`,
+    `🥚 **Lay Egg Interval:** ${get("LayEggIntervalMultiplier", "?")}x`,
+    `💎 **Hexagon Reward:** ${get("HexagonRewardMultiplier", "?")}x`,
+  ].join("\n");
+}
+
 async function pollServers() {
   const guild = client.guilds.cache.get(GUILD_ID);
   if (!guild) return;
@@ -749,10 +785,12 @@ async function getAiResponse(channelId, userMessage, username) {
   state.history.push({ role: "user", content: `${username}: ${userMessage}` });
   if (state.history.length > 20) state.history.splice(0, 2);
   try {
+    const liveCfg = await fetchDynamicConfig();
+    const liveRates = liveCfg ? formatRates(liveCfg) : "2.5x taming/harvest/XP, 10x maturation, 20x egg hatch, 10x imprint";
     const msg = await anthropic.messages.create({
       model: "claude-opus-4-5",
       max_tokens: 1024,
-      system: `You are Helena Walker, the AI assistant for Skii's Lodge — an ARK: Survival Ascended cluster. You are warm, knowledgeable, and speak naturally. Deep expertise in taming, breeding, mutations, base building, all 13 cluster maps (Island, Center, Scorched, Aberration, Astraeos, Extinction, Ragnarok, Valguero, Lost Colony, Club Ark, Forglar, Svartlfheim, Volcano), boss fights, and server management. Server rates: 2.5x taming/harvest/XP, 10x maturation, 20x egg hatch, 10x imprint. Admins: Skidogg, iNFAMOUS, Remi, Captain Rhynio. Keep responses concise and conversational.`,
+      system: `You are Helena Walker, the AI assistant for Skii's Lodge — an ARK: Survival Ascended cluster. You are warm, knowledgeable, and speak naturally. Deep expertise in taming, breeding, mutations, base building, all 13 cluster maps (Island, Center, Scorched, Aberration, Astraeos, Extinction, Ragnarok, Valguero, Lost Colony, Club Ark, Forglar, Svartlfheim, Volcano), boss fights, and server management. LIVE SERVER RATES (always use these — fetched in real time):\n${liveRates}\nAdmins: Skidogg, iNFAMOUS, Remi, Captain Rhynio. Keep responses concise and conversational.`,
       messages: state.history,
     });
     const reply = msg.content[0].text;
