@@ -15,10 +15,14 @@ http.createServer((req, res) => { res.writeHead(200); res.end("Status bot alive 
 //  CONFIG
 // ============================================================
 
-const DISCORD_TOKEN         = process.env.DISCORD_BOT_TOKEN;
-const GUILD_ID              = "636832636752625664";
+const DISCORD_TOKEN           = process.env.DISCORD_BOT_TOKEN;
+const GUILD_ID                = "636832636752625664";
 const STATUS_EMBED_CHANNEL_ID = "1509809942968799252"; // #┃✅┃live-server-status
 const UPDATE_INTERVAL_MINUTES = 5;
+
+// Admin role IDs — only these roles can use !status
+const ADMIN_ROLE_ID     = "1242319080760467557"; // Admin
+const ARK_ADMIN_ROLE_ID = "1242319323145166868"; // ARK Admin's
 
 const SERVERS = [
   { name: "Island",      bm_id: "36970150", channel_id: "1509809992998584321" },
@@ -42,6 +46,15 @@ const SERVERS = [
 
 let statusMessageId = null;
 const lastKnownState = {};
+
+// ============================================================
+//  ADMIN CHECK
+// ============================================================
+
+function isAdmin(member) {
+  if (!member) return false;
+  return member.roles.cache.has(ADMIN_ROLE_ID) || member.roles.cache.has(ARK_ADMIN_ROLE_ID);
+}
 
 // ============================================================
 //  BATTLEMETRICS API
@@ -87,7 +100,6 @@ async function discoverMissingServers() {
         }
       }
     }
-    // Log any still missing
     const stillMissing = SERVERS.filter(s => s.bm_id === null).map(s => s.name);
     if (stillMissing.length) console.log(`[Discovery] Still unmatched: ${stillMissing.join(", ")}`);
   } catch (err) {
@@ -159,7 +171,6 @@ async function pollServers() {
   const guild = client.guilds.cache.get(GUILD_ID);
   if (!guild) { console.error("[Poll] Guild not found."); return; }
 
-  // Fetch all statuses in parallel
   const results = await Promise.all(
     SERVERS.map(async (server) => {
       const data = server.bm_id ? await fetchServerStatus(server.bm_id) : null;
@@ -204,13 +215,39 @@ async function pollServers() {
 //  DISCORD CLIENT
 // ============================================================
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMembers,
+  ],
+});
 
 client.once("ready", async () => {
   console.log(`[Bot] ✅ Logged in as ${client.user.tag}`);
   await discoverMissingServers();
   await pollServers();
   setInterval(pollServers, UPDATE_INTERVAL_MINUTES * 60 * 1000);
+});
+
+// ── !status command — admin only ─────────────────────────────────────────────
+client.on("messageCreate", async (message) => {
+  if (message.author.bot) return;
+  if (message.content.trim().toLowerCase() !== "!status") return;
+
+  const member = message.member || await message.guild?.members.fetch(message.author.id).catch(() => null);
+
+  if (!isAdmin(member)) {
+    await message.reply("🚫 That command is for admins only.");
+    console.log(`[!status] Denied for ${message.author.username} — missing admin role`);
+    return;
+  }
+
+  console.log(`[!status] Triggered by admin ${message.author.username}`);
+  await message.reply("🔄 Polling servers now...");
+  await pollServers();
+  await message.channel.send("✅ Status updated!");
 });
 
 client.on("error", (err) => console.error("[Client] Error:", err.message));
