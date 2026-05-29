@@ -7,16 +7,15 @@ const Anthropic = require('@anthropic-ai/sdk');
 const fetch     = require('node-fetch');
 const http      = require('http');
 
-// ── Secrets (injected by Railway env vars) ────────────────────────────────────
-const DISCORD_BOT_TOKEN      = process.env.DISCORD_BOT_TOKEN;
-const WEBHOOK_URL            = process.env.ARKBOT_WEBHOOK_URL;
-const WEBHOOK_SECRET         = process.env.DISCORD_WEBHOOK_SECRET;
-const ANTHROPIC_API_KEY      = process.env.ANTHROPIC_API_KEY;
-const BATTLEMETRICS_API_KEY  = process.env.BATTLEMETRICS_API_KEY  || '';
-const BATTLEMETRICS_ORG_ID   = process.env.BATTLEMETRICS_ORG_ID   || '';
-const RCON_DEFAULT_PASSWORD  = process.env.RCON_DEFAULT_PASSWORD   || '';
+// ── Secrets (Railway env vars) ────────────────────────────────────────────────
+const DISCORD_BOT_TOKEN     = process.env.DISCORD_BOT_TOKEN;
+const WEBHOOK_URL           = process.env.ARKBOT_WEBHOOK_URL;
+const WEBHOOK_SECRET        = process.env.DISCORD_WEBHOOK_SECRET;
+const ANTHROPIC_API_KEY     = process.env.ANTHROPIC_API_KEY;
+const BATTLEMETRICS_API_KEY = process.env.BATTLEMETRICS_API_KEY || '';
+const BATTLEMETRICS_ORG_ID  = process.env.BATTLEMETRICS_ORG_ID  || '';
 
-// ── Config ────────────────────────────────────────────────────────────────────
+// ── IDs ───────────────────────────────────────────────────────────────────────
 const GUILD_ID                   = '636832636752625664';
 const OPEN_TICKETS_CATEGORY_ID   = '1390284215870033971';
 const ADMIN_LOGS_CHANNEL_ID      = '1275132184440868866';
@@ -27,7 +26,7 @@ const ADMIN_CONSOLE_CHANNEL_ID   = '1509762780192837675'; // #🛠️・admin-co
 const STAFF_CHAT_CHANNEL_ID      = '1509816635765293067'; // #🦑︱staff-chat
 const POLLS_CHANNEL_ID           = '1509816572322250852'; // #🗳️︱ark-polls
 const ADMIN_ROLE_ID              = '1242319080760467557';
-const ARK_ADMIN_ROLE_ID          = '1242319323145166868';
+const ARK_ADMIN_ROLE_ID          = '1242319323145166848';
 const BOT_USER_ID                = '1507730299356708984';
 const EVERYONE_ROLE_ID           = GUILD_ID;
 
@@ -36,11 +35,13 @@ const COLORS = {
   orange: 0xFF6B1A,
   blue:   0x1A8CFF,
   purple: 0x7B2FBE,
+  white:  0xF5F0E8,
   green:  0x2ECC71,
   red:    0xE74C3C,
+  yellow: 0xF1C40F,
 };
 
-// ── Map / Platform / Ticket data ──────────────────────────────────────────────
+// ── Cluster data (mutable — Helena can add/remove via actions) ────────────────
 let MAPS = [
   { name: 'Island',      label: 'The Island',     emoji: '🏝️' },
   { name: 'Center',      label: 'The Center',     emoji: '🌀' },
@@ -72,17 +73,15 @@ let TICKET_CATEGORIES = [
   { name: 'Bug Report',     emoji: '🐛', description: 'Report a server or game bug',       key: 'bug_report'    },
 ];
 
-// ── In-memory ticket state ────────────────────────────────────────────────────
-const activeTickets = new Map();
-
-// ── Per-channel AI conversation history ──────────────────────────────────────
-const conversationHistory = {};
+// ── State ─────────────────────────────────────────────────────────────────────
+const conversationHistory = {}; // channelId → [{role, content}]
+const escalatedTickets    = new Set(); // channelIds that have been escalated
 
 // ── Startup validation ────────────────────────────────────────────────────────
 if (!DISCORD_BOT_TOKEN) { console.error('❌ FATAL: DISCORD_BOT_TOKEN not set'); process.exit(1); }
 if (!WEBHOOK_URL)       { console.error('❌ FATAL: ARKBOT_WEBHOOK_URL not set'); process.exit(1); }
-if (!ANTHROPIC_API_KEY) { console.error('⚠️  WARNING: ANTHROPIC_API_KEY not set — AI brain disabled'); }
-console.log(`✅ Config OK | Webhook: ${WEBHOOK_URL} | AI: ${ANTHROPIC_API_KEY ? 'enabled' : 'disabled'}`);
+if (!ANTHROPIC_API_KEY) { console.error('⚠️  WARNING: ANTHROPIC_API_KEY not set — AI responses disabled'); }
+console.log(`✅ Config OK | AI: ${ANTHROPIC_API_KEY ? 'enabled' : 'DISABLED'}`);
 
 // ── Anthropic client ──────────────────────────────────────────────────────────
 const anthropic = ANTHROPIC_API_KEY ? new Anthropic({ apiKey: ANTHROPIC_API_KEY }) : null;
@@ -122,7 +121,7 @@ async function deleteMessage(channelId, messageId) {
   return dREST('DELETE', `/channels/${channelId}/messages/${messageId}`);
 }
 
-// ── BattleMetrics helpers ─────────────────────────────────────────────────────
+// ── BattleMetrics ─────────────────────────────────────────────────────────────
 async function getBMServers() {
   if (!BATTLEMETRICS_API_KEY || !BATTLEMETRICS_ORG_ID) return [];
   try {
@@ -132,26 +131,137 @@ async function getBMServers() {
     );
     const json = await res.json();
     return json.data || [];
-  } catch (err) { console.error('❌ BattleMetrics fetch error:', err.message); return []; }
+  } catch (err) { console.error('❌ BattleMetrics error:', err.message); return []; }
 }
 
-// ── Helena AI brain ───────────────────────────────────────────────────────────
-async function handleHelenaAI(message, guild) {
+// ── Forward to ArkBot webhook ─────────────────────────────────────────────────
+async function forwardToWebhook(payload) {
+  try {
+    const res = await fetch(WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-webhook-secret': WEBHOOK_SECRET || '' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) { console.error(`❌ Webhook ${res.status}: ${await res.text()}`); return null; }
+    return await res.json();
+  } catch (err) { console.error(`❌ Webhook error: ${err.message}`); return null; }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AI BRAIN — TICKET SUPPORT (Helena responds to players in open-* channels)
+// ─────────────────────────────────────────────────────────────────────────────
+async function handleTicketAI(message, guild, isFirstMessage = false) {
   if (!anthropic) {
-    await message.channel.send('❌ AI brain is offline — `ANTHROPIC_API_KEY` not set in Railway env vars.');
+    await message.channel.send('❌ AI brain offline. An admin will be with you shortly.');
     return;
   }
 
   const channelId = message.channel.id;
   if (!conversationHistory[channelId]) conversationHistory[channelId] = [];
 
-  // Add user message
+  if (!isFirstMessage) {
+    conversationHistory[channelId].push({
+      role: 'user',
+      content: `[${message.member.displayName}]: ${message.content}`,
+    });
+  }
+
+  if (conversationHistory[channelId].length > 30) {
+    conversationHistory[channelId] = conversationHistory[channelId].slice(-30);
+  }
+
+  const systemPrompt = `You are Helena, the support assistant for Skii's Lodge — an ARK Survival Ascended cluster. You are warm, helpful, and knowledgeable. You speak naturally and conversationally, never like a bot.
+
+Your job is to help players resolve their issues. You have deep knowledge of ARK Survival Ascended:
+- Taming: food, effectiveness, knockout methods, torpor drain for all creatures
+- Breeding: imprinting, mutations (20/20 cap), stat inheritance, maturation timers
+- All cluster maps: The Island, The Center, Scorched Earth, Forglar, Aberration, Club Ark, Svartlfheim, Astraeos, Extinction, Volcano, Valguero, Lost Colony
+- Base building, electricity, TEK tier, engrams, crafting
+- Boss fights, artifacts, terminals, ascension
+- Tribes, alliances, permissions, tribe logs
+- Common ASA bugs and workarounds
+- Server rules: PVE, turrets set to wild creatures only (inside base or TEK shield can be all targets), no building at spawn points, no blocking artifacts, taming traps must be removed within 12 hours
+- Server rates: 2.5x taming, 2.5x harvesting, 2.5x XP, 10x maturation, 20x egg hatch, 10x imprint, 0.15x cuddle interval
+- Server admins: Skidogg, iNFAMOUS, Remi, Captain Rhynio
+
+Response strategy:
+1. Try to fully resolve the issue yourself with clear, helpful info
+2. If it genuinely requires admin action (tame/item restoration, player bans, base wipes, server-side fixes, tribe log reviews) add [ESCALATE] at the very end of your message
+3. When you resolve an issue, tell the player they can close the ticket with the 🔒 button
+4. Be warm and patient — players may be frustrated
+
+Add [ESCALATE] ONLY for issues requiring actual admin intervention. Do NOT add it for questions, how-to queries, rule clarifications, or anything you can answer yourself.`;
+
+  try {
+    const messages = isFirstMessage
+      ? [{ role: 'user', content: conversationHistory[channelId][0]?.content || 'A player just opened a support ticket.' }]
+      : conversationHistory[channelId];
+
+    const response = await anthropic.messages.create({
+      model: 'claude-opus-4-5',
+      max_tokens: 1000,
+      system: systemPrompt,
+      messages,
+    });
+
+    const fullReply      = response.content[0].text;
+    const shouldEscalate = fullReply.includes('[ESCALATE]');
+    const cleanReply     = fullReply.replace('[ESCALATE]', '').trim();
+
+    conversationHistory[channelId].push({ role: 'assistant', content: cleanReply });
+
+    // Send Helena's response
+    await sendEmbed(channelId,
+      new EmbedBuilder()
+        .setDescription(cleanReply)
+        .setColor(shouldEscalate ? COLORS.yellow : COLORS.blue)
+        .setFooter({ text: 'Helena • Support' })
+        .setTimestamp()
+    );
+
+    // Escalate if needed and not already done
+    if (shouldEscalate && !escalatedTickets.has(channelId)) {
+      escalatedTickets.add(channelId);
+
+      await sendEmbed(channelId,
+        new EmbedBuilder()
+          .setTitle('🚨  ADMIN ATTENTION NEEDED')
+          .setDescription(`<@&${ADMIN_ROLE_ID}> <@&${ARK_ADMIN_ROLE_ID}> — this ticket requires admin assistance.\n\nHelena has reviewed the issue and determined it needs a human admin to resolve.`)
+          .setColor(COLORS.red)
+          .setFooter({ text: 'Helena • Escalated Ticket' })
+          .setTimestamp()
+      );
+
+      await sendMessage(ADMIN_LOGS_CHANNEL_ID,
+        `🚨 **[Auto-Escalated]** <#${channelId}> | **${message.member.displayName}** | Needs admin review\n<@&${ADMIN_ROLE_ID}> <@&${ARK_ADMIN_ROLE_ID}>`
+      );
+
+      console.log(`🚨 Auto-escalated ticket ${channelId} for ${message.member.displayName}`);
+    }
+
+  } catch (err) {
+    console.error('❌ Anthropic ticket error:', err.message);
+    await message.channel.send('❌ I ran into an issue. An admin will be with you shortly.');
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AI BRAIN — ADMIN CONSOLE (Helena responds to admins in #admin-console / #staff-chat)
+// ─────────────────────────────────────────────────────────────────────────────
+async function handleAdminAI(message, guild) {
+  if (!anthropic) {
+    await message.channel.send('❌ AI brain offline — set `ANTHROPIC_API_KEY` in Railway env vars.');
+    return;
+  }
+
+  const channelId = message.channel.id;
+  if (!conversationHistory[channelId]) conversationHistory[channelId] = [];
+
   conversationHistory[channelId].push({
     role: 'user',
     content: `[${message.member.displayName}]: ${message.content}`,
   });
 
-  // Keep last 20 messages
   if (conversationHistory[channelId].length > 20) {
     conversationHistory[channelId] = conversationHistory[channelId].slice(-20);
   }
@@ -159,29 +269,22 @@ async function handleHelenaAI(message, guild) {
   // Build live server context
   const servers    = await getBMServers();
   const serverList = servers.length
-    ? servers.map(s => `${s.attributes.name} — ${s.attributes.status} — ${s.attributes.players}/${s.attributes.maxPlayers} players`).join('\n')
-    : 'BattleMetrics not configured or unavailable.';
+    ? servers.map(s => `${s.attributes.name} — ${s.attributes.status} — ${s.attributes.players}/${s.attributes.maxPlayers}`).join('\n')
+    : 'BattleMetrics not configured.';
 
-  const systemPrompt = `You are Helena, the intelligent admin assistant for Skii's Lodge — an ARK Survival Ascended cluster Discord server. You are sharp, calm, and direct. You speak naturally like a knowledgeable team member, not a bot. You only respond in #admin-console and #staff-chat.
+  const systemPrompt = `You are Helena, the intelligent admin assistant for Skii's Lodge — an ARK Survival Ascended cluster. You are sharp, calm, and direct. You speak naturally like a trusted team member. You only respond in #admin-console and #staff-chat.
 
-You assist admins with server management, player issues, RCON commands, polls, and cluster configuration. When an admin asks you to take action, respond naturally AND append a special action tag at the END of your message so the bot can parse and execute it:
+When an admin asks you to do something, respond naturally AND append an action tag at the END of your message:
 
 [ACTION:action_name:param1:param2:...]
 
 Available actions:
-- [ACTION:broadcast:message] — Broadcast a message to all servers via RCON
-- [ACTION:kick:playerName:reason] — Kick a player from all servers
-- [ACTION:ban:playerName:reason] — Ban a player from all servers
-- [ACTION:online] — Show live player counts across all servers
-- [ACTION:rcon_all:command] — Send any RCON command to ALL servers
-- [ACTION:rcon_one:serverName:command] — Send RCON to a specific server
-- [ACTION:restart:serverName] — Schedule a restart for a specific server (5 min warning)
-- [ACTION:restart_all] — Schedule restart for all servers (5 min warning)
 - [ACTION:poll:question|option1|option2|option3:durationHours] — Post a poll to #ark-polls
-- [ACTION:add_map:mapName:emoji] — Add a map to the cluster config
-- [ACTION:remove_map:mapName] — Remove a map from the cluster config
-- [ACTION:add_ticket_category:name:emoji:description] — Add a support ticket category
-- [ACTION:remove_ticket_category:name] — Remove a support ticket category
+- [ACTION:add_map:mapName:emoji] — Add a map to the cluster
+- [ACTION:remove_map:mapName] — Remove a map from the cluster
+- [ACTION:add_ticket_category:name:emoji:description] — Add a ticket category
+- [ACTION:remove_ticket_category:name] — Remove a ticket category
+- [ACTION:online] — Show live player counts from BattleMetrics
 
 Current cluster servers:
 ${serverList}
@@ -190,12 +293,12 @@ Current maps: ${MAPS.map(m => m.label).join(', ')}
 Current ticket categories: ${TICKET_CATEGORIES.map(c => c.name).join(', ')}
 Server admins: Skidogg, iNFAMOUS, Remi, Captain Rhynio
 
-Rules: Never expose raw IPs, passwords, or tokens in your responses. If no action is needed, respond normally with no action tag. Always respond naturally first, action tag last.`;
+Respond naturally first, action tag last. If no action needed, respond normally with no action tag.`;
 
   try {
     const response = await anthropic.messages.create({
       model: 'claude-opus-4-5',
-      max_tokens: 1024,
+      max_tokens: 1000,
       system: systemPrompt,
       messages: conversationHistory[channelId],
     });
@@ -204,121 +307,54 @@ Rules: Never expose raw IPs, passwords, or tokens in your responses. If no actio
     const cleanReply = fullReply.replace(/\[ACTION:[^\]]+\]/g, '').trim();
     const actions    = fullReply.match(/\[ACTION:[^\]]+\]/g) || [];
 
-    // Add to history
     conversationHistory[channelId].push({ role: 'assistant', content: fullReply });
 
-    // Send Helena's reply as embed
-    await sendEmbed(message.channel.id,
+    await sendEmbed(channelId,
       new EmbedBuilder()
         .setDescription(cleanReply)
         .setColor(COLORS.purple)
-        .setAuthor({ name: 'Helena', iconURL: `https://cdn.discordapp.com/avatars/${BOT_USER_ID}/` })
         .setFooter({ text: 'Helena • Admin Console' })
         .setTimestamp()
     );
 
-    // Execute any actions
     for (const actionStr of actions) {
-      await executeAction(actionStr, message, guild);
+      await executeAdminAction(actionStr, message, guild);
     }
 
   } catch (err) {
-    console.error('❌ Anthropic API error:', err.message);
-    await message.channel.send('❌ I ran into an issue processing that. Please try again.');
+    console.error('❌ Anthropic admin error:', err.message);
+    await message.channel.send('❌ I ran into an issue. Please try again.');
   }
 }
 
-// ── Action executor ───────────────────────────────────────────────────────────
-async function executeAction(actionStr, message, guild) {
+// ── Admin action executor ─────────────────────────────────────────────────────
+async function executeAdminAction(actionStr, message, guild) {
   const inner  = actionStr.replace('[ACTION:', '').replace(']', '');
   const parts  = inner.split(':');
   const action = parts[0];
 
-  console.log(`⚙️ Executing action: ${action} | params: ${parts.slice(1).join(', ')}`);
+  console.log(`⚙️ Admin action: ${action} | ${parts.slice(1).join(' | ')}`);
 
   switch (action) {
 
     case 'online': {
       const servers = await getBMServers();
       if (!servers.length) {
-        await sendEmbed(message.channel.id, new EmbedBuilder().setTitle('🖥️ Server Status').setDescription('BattleMetrics not configured or unavailable.').setColor(COLORS.red));
+        await sendEmbed(message.channel.id,
+          new EmbedBuilder().setTitle('🖥️ Server Status').setDescription('BattleMetrics not configured.').setColor(COLORS.red)
+        );
         return;
       }
       const embed = new EmbedBuilder().setTitle('🖥️  CLUSTER STATUS').setColor(COLORS.blue).setFooter({ text: 'Helena • BattleMetrics' }).setTimestamp();
       let total = 0;
       for (const s of servers) {
-        const a = s.attributes;
+        const a    = s.attributes;
         const icon = a.status === 'online' ? '🟢' : '🔴';
         embed.addFields({ name: `${icon} ${a.name}`, value: `**${a.players}/${a.maxPlayers}** players`, inline: true });
         total += a.players || 0;
       }
       embed.setDescription(`**Total players online: ${total}**`);
       await sendEmbed(message.channel.id, embed);
-      break;
-    }
-
-    case 'broadcast': {
-      const msg = parts.slice(1).join(':');
-      await sendEmbed(message.channel.id,
-        new EmbedBuilder()
-          .setTitle('📢  BROADCAST QUEUED')
-          .setDescription(`**Message:** ${msg}\n\n⚠️ RCON not yet configured — add \`RCON_DEFAULT_PASSWORD\` to Railway env vars to enable live RCON commands.`)
-          .setColor(COLORS.orange)
-          .setFooter({ text: 'Helena • RCON' })
-          .setTimestamp()
-      );
-      break;
-    }
-
-    case 'kick': {
-      const playerName = parts[1];
-      const reason     = parts.slice(2).join(':') || 'Kicked by admin';
-      await sendEmbed(message.channel.id,
-        new EmbedBuilder()
-          .setTitle('👢  KICK LOGGED')
-          .setDescription(`**Player:** ${playerName}\n**Reason:** ${reason}\n\n⚠️ RCON not yet configured — add \`RCON_DEFAULT_PASSWORD\` to Railway env vars to enable live kicks.`)
-          .setColor(COLORS.orange)
-          .setFooter({ text: 'Helena • RCON' })
-          .setTimestamp()
-      );
-      // Log to admin-logs
-      await sendMessage(ADMIN_LOGS_CHANNEL_ID,
-        `👢 **[Kick Requested]** Player: **${playerName}** | Reason: ${reason} | Requested by <@${message.author.id}>`
-      );
-      break;
-    }
-
-    case 'ban': {
-      const playerName = parts[1];
-      const reason     = parts.slice(2).join(':') || 'Banned by admin';
-      await sendEmbed(message.channel.id,
-        new EmbedBuilder()
-          .setTitle('🔨  BAN LOGGED')
-          .setDescription(`**Player:** ${playerName}\n**Reason:** ${reason}\n\n⚠️ RCON not yet configured — add \`RCON_DEFAULT_PASSWORD\` to enable live bans.`)
-          .setColor(COLORS.red)
-          .setFooter({ text: 'Helena • RCON' })
-          .setTimestamp()
-      );
-      await sendMessage(ADMIN_LOGS_CHANNEL_ID,
-        `🔨 **[Ban Requested]** Player: **${playerName}** | Reason: ${reason} | Requested by <@${message.author.id}>`
-      );
-      break;
-    }
-
-    case 'rcon_all':
-    case 'rcon_one':
-    case 'restart':
-    case 'restart_all': {
-      const serverTarget = parts[1] || 'all';
-      const command      = parts.slice(action === 'rcon_one' || action === 'restart' ? 2 : 1).join(':');
-      await sendEmbed(message.channel.id,
-        new EmbedBuilder()
-          .setTitle(`⚙️  RCON — ${action === 'restart_all' ? 'ALL SERVERS' : serverTarget.toUpperCase()}`)
-          .setDescription(`**Command:** \`${command || 'DoExit'}\`\n\n⚠️ RCON not yet configured — add \`RCON_DEFAULT_PASSWORD\` to Railway env vars to enable live RCON execution.`)
-          .setColor(COLORS.blue)
-          .setFooter({ text: 'Helena • RCON' })
-          .setTimestamp()
-      );
       break;
     }
 
@@ -334,10 +370,13 @@ async function executeAction(actionStr, message, guild) {
         return;
       }
 
-      // Post poll as embed to #ark-polls (Discord native polls require specific API version)
+      // Post as embed to #ark-polls
       const pollEmbed = new EmbedBuilder()
         .setTitle(`📊  ${question}`)
-        .setDescription(answers.map((a, i) => `${['1️⃣','2️⃣','3️⃣','4️⃣','5️⃣'][i] || `${i+1}.`} ${a}`).join('\n') + `\n\n⏱️ Duration: **${durationHrs} hours**`)
+        .setDescription(
+          answers.map((a, i) => `${['1️⃣','2️⃣','3️⃣','4️⃣','5️⃣'][i] || `${i+1}.`} ${a}`).join('\n') +
+          `\n\n⏱️ Duration: **${durationHrs} hours**`
+        )
         .setColor(COLORS.blue)
         .setFooter({ text: 'Helena • Polls — React with the number to vote!' })
         .setTimestamp();
@@ -346,10 +385,8 @@ async function executeAction(actionStr, message, guild) {
       await sendEmbed(message.channel.id,
         new EmbedBuilder()
           .setTitle('📊  POLL PUBLISHED')
-          .setDescription(`**Question:** ${question}\n**Options:** ${answers.join(', ')}\n**Duration:** ${durationHrs} hours\n\nPosted to <#${POLLS_CHANNEL_ID}>`)
-          .setColor(COLORS.green)
-          .setFooter({ text: 'Helena • Polls' })
-          .setTimestamp()
+          .setDescription(`**Question:** ${question}\n**Options:** ${answers.join(', ')}\n**Duration:** ${durationHrs}h\n\nPosted to <#${POLLS_CHANNEL_ID}>`)
+          .setColor(COLORS.green).setFooter({ text: 'Helena • Polls' }).setTimestamp()
       );
       break;
     }
@@ -360,7 +397,7 @@ async function executeAction(actionStr, message, guild) {
       if (!MAPS.find(m => m.name === mapName || m.label === mapName)) {
         MAPS.push({ name: mapName, label: mapName, emoji: mapEmoji });
         await sendEmbed(message.channel.id,
-          new EmbedBuilder().setTitle('✅  MAP ADDED').setDescription(`**${mapEmoji} ${mapName}** added to cluster config.\n\nRestart Helena to update the #get-roles channel.`).setColor(COLORS.green).setFooter({ text: 'Helena • Config' }).setTimestamp()
+          new EmbedBuilder().setTitle('✅  MAP ADDED').setDescription(`**${mapEmoji} ${mapName}** added.\n\nRestart to update #get-roles.`).setColor(COLORS.green).setFooter({ text: 'Helena • Config' }).setTimestamp()
         );
       } else {
         await sendMessage(message.channel.id, `⚠️ **${mapName}** is already in the config.`);
@@ -374,10 +411,10 @@ async function executeAction(actionStr, message, guild) {
       if (idx !== -1) {
         MAPS.splice(idx, 1);
         await sendEmbed(message.channel.id,
-          new EmbedBuilder().setTitle('✅  MAP REMOVED').setDescription(`**${mapName}** removed from cluster config.\n\nRestart Helena to update the #get-roles channel.`).setColor(COLORS.orange).setFooter({ text: 'Helena • Config' }).setTimestamp()
+          new EmbedBuilder().setTitle('✅  MAP REMOVED').setDescription(`**${mapName}** removed.\n\nRestart to update #get-roles.`).setColor(COLORS.orange).setFooter({ text: 'Helena • Config' }).setTimestamp()
         );
       } else {
-        await sendMessage(message.channel.id, `⚠️ Could not find map **"${mapName}"** in the config.`);
+        await sendMessage(message.channel.id, `⚠️ Map **"${mapName}"** not found.`);
       }
       break;
     }
@@ -390,7 +427,7 @@ async function executeAction(actionStr, message, guild) {
       if (!TICKET_CATEGORIES.find(c => c.name === catName)) {
         TICKET_CATEGORIES.push({ name: catName, emoji: catEmoji, description: catDesc, key: catKey });
         await sendEmbed(message.channel.id,
-          new EmbedBuilder().setTitle('✅  TICKET CATEGORY ADDED').setDescription(`**${catEmoji} ${catName}** added.\n\nRestart Helena to update the ticket panel.`).setColor(COLORS.green).setFooter({ text: 'Helena • Config' }).setTimestamp()
+          new EmbedBuilder().setTitle('✅  CATEGORY ADDED').setDescription(`**${catEmoji} ${catName}** added.\n\nRestart to update the ticket panel.`).setColor(COLORS.green).setFooter({ text: 'Helena • Config' }).setTimestamp()
         );
       } else {
         await sendMessage(message.channel.id, `⚠️ Category **"${catName}"** already exists.`);
@@ -404,20 +441,20 @@ async function executeAction(actionStr, message, guild) {
       if (idx !== -1) {
         TICKET_CATEGORIES.splice(idx, 1);
         await sendEmbed(message.channel.id,
-          new EmbedBuilder().setTitle('✅  TICKET CATEGORY REMOVED').setDescription(`**${catName}** removed.\n\nRestart Helena to update the ticket panel.`).setColor(COLORS.orange).setFooter({ text: 'Helena • Config' }).setTimestamp()
+          new EmbedBuilder().setTitle('✅  CATEGORY REMOVED').setDescription(`**${catName}** removed.\n\nRestart to update the ticket panel.`).setColor(COLORS.orange).setFooter({ text: 'Helena • Config' }).setTimestamp()
         );
       } else {
-        await sendMessage(message.channel.id, `⚠️ Could not find category **"${catName}"**.`);
+        await sendMessage(message.channel.id, `⚠️ Category **"${catName}"** not found.`);
       }
       break;
     }
 
     default:
-      console.log(`⚠️ Unknown action: ${action}`);
+      console.log(`⚠️ Unknown admin action: ${action}`);
   }
 }
 
-// ── Role embeds — post once to #get-roles ─────────────────────────────────────
+// ── Role embeds ───────────────────────────────────────────────────────────────
 async function ensureRoleEmbeds() {
   try {
     const msgs = await dREST('GET', `/channels/${ROLES_CHANNEL_ID}/messages?limit=20`);
@@ -426,11 +463,9 @@ async function ensureRoleEmbeds() {
     }
   } catch { /* ignore */ }
 
-  console.log('📋 Posting role embeds...');
-
   const mapEmbed = new EmbedBuilder()
     .setTitle('🗺️  SELECT YOUR MAP ROLES')
-    .setDescription('Select the maps you play on to receive relevant pings and updates.\nYou can select multiple maps!')
+    .setDescription('Select the maps you play on!\nYou can select multiple maps.')
     .setColor(COLORS.blue).setFooter({ text: 'Helena • Skii\'s Lodge' }).setTimestamp();
 
   const mapMenu = new ActionRowBuilder().addComponents(
@@ -456,7 +491,7 @@ async function ensureRoleEmbeds() {
   console.log('✅ Role embeds posted!');
 }
 
-// ── Ticket panel — post once to #support-ticket ───────────────────────────────
+// ── Ticket panel ──────────────────────────────────────────────────────────────
 async function ensureTicketPanel() {
   try {
     const msgs = await dREST('GET', `/channels/${SUPPORT_TRIGGER_CHANNEL_ID}/messages?limit=20`);
@@ -465,14 +500,12 @@ async function ensureTicketPanel() {
     }
   } catch { /* ignore */ }
 
-  console.log('🎫 Posting ticket panel...');
-
   const ticketEmbed = new EmbedBuilder()
     .setTitle('🎫  SUPPORT TICKETS')
     .setDescription(
-      'Need help from the team? Click a button below to open a ticket!\n\n' +
+      'Need help? Click a button below or just type your issue — Helena will respond immediately!\n\n' +
       TICKET_CATEGORIES.map(c => `${c.emoji} **${c.name}** — ${c.description}`).join('\n') +
-      '\n\n*A private channel will be created for you and the admin team.*'
+      '\n\n*A private channel will be created for you. Helena will respond instantly and escalate to an admin if needed.*'
     )
     .setColor(COLORS.purple).setFooter({ text: 'Helena • Support System' }).setTimestamp();
 
@@ -493,29 +526,33 @@ async function ensureTicketPanel() {
   console.log('✅ Ticket panel posted!');
 }
 
-// ── Startup online message → #admin-console ───────────────────────────────────
+// ── Startup online message ────────────────────────────────────────────────────
 async function postOnlineMessage() {
-  const servers      = await getBMServers();
-  const onlineCount  = servers.filter(s => s.attributes.status === 'online').length;
-  const totalPlayers = servers.reduce((sum, s) => sum + (s.attributes.players || 0), 0);
+  const startTs = Math.floor(Date.now() / 1000);
 
-  const embed = new EmbedBuilder()
-    .setTitle('🟢  HELENA IS ONLINE')
-    .setDescription(
-      `Systems are up and I am ready to go.\n\n` +
-      `🖥️ **Servers Online:** ${servers.length ? `${onlineCount}/${servers.length}` : 'BattleMetrics not configured'}\n` +
-      `🦖 **Players Online:** ${totalPlayers}\n` +
-      `🤖 **AI Brain:** ${ANTHROPIC_API_KEY ? '✅ Active' : '❌ Disabled — set ANTHROPIC_API_KEY in Railway'}\n` +
-      `🕐 **Started:** <t:${Math.floor(Date.now() / 1000)}:F>\n\n` +
-      `*Talk to me naturally in this channel — I can handle server status, player management, broadcasts, polls, and config changes.*`
-    )
-    .setColor(COLORS.green).setFooter({ text: 'Helena • Admin Console' }).setTimestamp();
+  for (const [channelId, label] of [
+    [ADMIN_CONSOLE_CHANNEL_ID, 'Admin Console'],
+    [STAFF_CHAT_CHANNEL_ID,    'Staff Chat'],
+  ]) {
+    const isAdmin = label === 'Admin Console';
+    const embed = new EmbedBuilder()
+      .setTitle('🟢  HELENA IS ONLINE')
+      .setDescription(
+        `Systems are up and I am ready to go.\n\n` +
+        `🤖 **AI Brain:** ${ANTHROPIC_API_KEY ? '✅ Active' : '❌ Disabled — set ANTHROPIC_API_KEY in Railway'}\n` +
+        `🕐 **Started:** <t:${startTs}:F>\n\n` +
+        (isAdmin
+          ? `*Talk to me naturally — polls, config changes, server status, and more. I am also actively monitoring support tickets and responding to players automatically.*`
+          : `*I am online and monitoring tickets. Talk to me here if you need anything.*`)
+      )
+      .setColor(COLORS.green).setFooter({ text: `Helena • ${label}` }).setTimestamp();
 
-  await sendEmbed(ADMIN_CONSOLE_CHANNEL_ID, embed);
-  console.log('✅ Online message posted to #admin-console');
+    await sendEmbed(channelId, embed);
+    console.log(`✅ Online message → #${label.toLowerCase().replace(' ', '-')}`);
+  }
 }
 
-// ── Create private ticket channel ─────────────────────────────────────────────
+// ── Create ticket channel ─────────────────────────────────────────────────────
 async function createTicketChannel(guild, member, category, originalMessage = null) {
   const existingChannel = guild.channels.cache.find(
     c => c.name.startsWith(`open-${member.user.username.toLowerCase()}`)
@@ -543,9 +580,10 @@ async function createTicketChannel(guild, member, category, originalMessage = nu
   const ticketEmbed = new EmbedBuilder()
     .setTitle(`${cat.emoji}  ${cat.name} — Support Ticket`)
     .setDescription(
-      `Hey ${member}! 👋\n\nAn admin will be with you shortly. Please describe your issue in as much detail as possible.\n\n` +
+      `Hey ${member}! 👋 I'm Helena, the cluster assistant. I've received your message and I'm on it!\n\n` +
       (originalMessage ? `📝 **Your message:** ${originalMessage}\n\n` : '') +
-      `📋 **Category:** ${cat.name}\n🕐 **Opened:** <t:${Math.floor(Date.now() / 1000)}:F>`
+      `📋 **Category:** ${cat.name}\n🕐 **Opened:** <t:${Math.floor(Date.now() / 1000)}:F>\n\n` +
+      `*If your issue needs an admin I'll escalate it automatically. Close this ticket anytime with the button below.*`
     )
     .setColor(COLORS.green).setFooter({ text: 'Helena • Support Ticket — OPEN' }).setTimestamp();
 
@@ -554,143 +592,8 @@ async function createTicketChannel(guild, member, category, originalMessage = nu
   );
 
   await ticketChannel.send({ embeds: [ticketEmbed], components: [closeButton] });
-
-  activeTickets.set(ticketChannel.id, {
-    userId: member.user.id, username: member.user.globalName || member.user.username,
-    stage: 'waiting_for_issue', collectedData: originalMessage || '', issueType: cat.name,
-  });
-
-  console.log(`✅ Created ticket #${ticketChannel.name} for ${member.user.username} [${cat.name}]`);
+  console.log(`✅ Ticket #${ticketChannel.name} opened for ${member.user.username} [${cat.name}]`);
   return { channel: ticketChannel };
-}
-
-// ── Close ticket channel ──────────────────────────────────────────────────────
-async function closeTicketChannel(channelId, channelName, userId) {
-  const newName = channelName.replace('open-', 'closed-').replace('ticket-', 'closed-');
-  await dREST('PATCH', `/channels/${channelId}`, { name: newName });
-  await dREST('PUT', `/channels/${channelId}/permissions/${userId}`, {
-    type: 1, deny: String(PermissionFlagsBits.ViewChannel | PermissionFlagsBits.SendMessages), allow: '0',
-  });
-  console.log(`🔒 Closed ticket: #${newName}`);
-}
-
-// ── Issue classification ──────────────────────────────────────────────────────
-function classifyIssue(text) {
-  const l = text.toLowerCase();
-  if (l.includes('stuck') || l.includes('mesh') || l.includes('under the map')) return 'Stuck/Meshed';
-  if ((l.includes('lost') || l.includes('missing') || l.includes('gone')) && (l.includes('dino') || l.includes('item') || l.includes('tame') || l.includes('character'))) return 'Lost Dino/Items';
-  if (l.includes('report') || l.includes('hacker') || l.includes('cheat') || l.includes('exploit')) return 'Player Report';
-  if (l.includes('ban') || l.includes('appeal') || l.includes('unban')) return 'Ban Appeal';
-  if (l.includes('lag') || l.includes('crash') || l.includes('server down') || l.includes('offline')) return 'Server Issue';
-  if (l.includes('bug') || l.includes('glitch') || l.includes('broken') || l.includes('not working')) return 'Bug/Glitch';
-  return 'General Support';
-}
-
-function needsAdmin(issueType) {
-  return ['Stuck/Meshed', 'Lost Dino/Items', 'Player Report', 'Ban Appeal', 'Server Issue'].includes(issueType);
-}
-
-function getFollowUpQuestions(issueType) {
-  switch (issueType) {
-    case 'Stuck/Meshed':    return `To get you unstuck:\n• **Which server/map?**\n• **Your coordinates?** (press **H** in-game)\n• How did it happen?`;
-    case 'Lost Dino/Items': return `To investigate:\n• **Which server/map?**\n• **Dino/item description?**\n• **Tribe name?**\n• **When?** (EST)`;
-    case 'Player Report':   return `To process your report:\n• **Suspect's IGN + tribe?**\n• **Which server/map?**\n• **What did they do?**\n• **Evidence?** (screenshots/clips)`;
-    case 'Bug/Glitch':      return `To investigate:\n• **Which server/map?**\n• **Coordinates?** (press **H**)\n• **What happened?**`;
-    case 'Server Issue':    return `To report:\n• **Which server/map?**\n• **What are you experiencing?**\n• **When did it start?** (EST)`;
-    case 'Ban Appeal':      return `For your appeal:\n• **In-game name + tribe?**\n• **When were you banned?**\n• **Why do you think it was incorrect?**`;
-    default:                return `A bit more info:\n• **Which server/map?**\n• **Your in-game name?**\n• **Full description of your issue?**`;
-  }
-}
-
-// ── Escalate ticket ───────────────────────────────────────────────────────────
-async function escalateTicket(channelId, channelName, ticket) {
-  ticket.stage = 'escalated';
-  activeTickets.set(channelId, ticket);
-
-  await sendMessage(channelId,
-    `📋 **Ticket Summary**\n• **Issue:** ${ticket.issueType}\n• **Player:** ${ticket.username}\n• **Details:** ${(ticket.collectedData || 'No details yet').substring(0, 400)}\n\n` +
-    `I've gathered everything I can — escalating to the admin team now!\n\n` +
-    `<@&${ADMIN_ROLE_ID}> <@&${ARK_ADMIN_ROLE_ID}> — please review this ticket.\n\n` +
-    `**${ticket.username}**, an admin will be with you shortly. Please stay here! 🙏`
-  );
-  await sendMessage(ADMIN_LOGS_CHANNEL_ID,
-    `🚨 **[Ticket Escalated]** <#${channelId}> | **${ticket.username}** | **${ticket.issueType}**\n> ${(ticket.collectedData || '').substring(0, 200)}\n\n<@&${ADMIN_ROLE_ID}> <@&${ARK_ADMIN_ROLE_ID}>`
-  );
-}
-
-// ── Handle ticket text conversation ──────────────────────────────────────────
-async function handleTicketMessage(message) {
-  const channelId   = message.channel.id;
-  const channelName = message.channel.name;
-  const content     = message.content.trim();
-  const lower       = content.toLowerCase();
-  const ticket      = activeTickets.get(channelId);
-  if (!ticket) return;
-
-  if (content.toUpperCase() === 'URGENT' || lower.includes('urgent')) {
-    ticket.collectedData = ticket.collectedData || content;
-    await escalateTicket(channelId, channelName, ticket); return;
-  }
-
-  if (ticket.stage === 'waiting_for_issue') {
-    ticket.collectedData = (ticket.collectedData ? ticket.collectedData + '\n' : '') + content;
-    ticket.issueType     = classifyIssue(content);
-    ticket.stage         = 'waiting_for_details';
-    activeTickets.set(channelId, ticket);
-    await sendMessage(channelId,
-      `Got it — logging this as **${ticket.issueType}**.\n\n${getFollowUpQuestions(ticket.issueType)}\n\n*(Type **URGENT** at any time to immediately reach a human admin.)*`
-    );
-    return;
-  }
-
-  if (ticket.stage === 'waiting_for_details') {
-    ticket.collectedData += '\n' + content;
-    activeTickets.set(channelId, ticket);
-    if (needsAdmin(ticket.issueType)) { await escalateTicket(channelId, channelName, ticket); return; }
-    ticket.stage = 'waiting_for_resolution_confirm';
-    activeTickets.set(channelId, ticket);
-    const result = await forwardToWebhook({
-      type: 'ticket_resolve', channel_id: channelId, channel_name: channelName,
-      content: ticket.collectedData, issue_type: ticket.issueType,
-      author: { id: ticket.userId, username: ticket.username, global_name: ticket.username, bot: false },
-    });
-    if (!result || result.action === 'no_response') { await escalateTicket(channelId, channelName, ticket); return; }
-    await sendMessage(channelId, `\n✅ Did that answer your question? Reply **YES** to close or **NO** if you still need help.`);
-    return;
-  }
-
-  if (ticket.stage === 'waiting_for_resolution_confirm') {
-    const resolved   = lower === 'yes' || ['resolved','fixed','thanks','thank you','ty','perfect','good'].some(w => lower.includes(w));
-    const unresolved = lower === 'no'  || ['still','not fixed','nope',"doesn't","didn't"].some(w => lower.includes(w));
-    if (resolved) {
-      ticket.stage = 'closed'; activeTickets.set(channelId, ticket);
-      await sendMessage(channelId, `🎉 Glad I could help, **${ticket.username}**! Closing this ticket now. Happy surviving! 🦕`);
-      await closeTicketChannel(channelId, channelName, ticket.userId);
-      await sendMessage(ADMIN_LOGS_CHANNEL_ID, `✅ **[Ticket Resolved]** <#${channelId}> | **${ticket.username}** | ${ticket.issueType}`);
-    } else if (unresolved) {
-      await escalateTicket(channelId, channelName, ticket);
-    } else {
-      await sendMessage(channelId, `Please reply **YES** if resolved, or **NO** if you still need help.`);
-    }
-    return;
-  }
-
-  if (ticket.stage === 'escalated') return; // Admins handle it
-}
-
-// ── Forward to ArkBot webhook ─────────────────────────────────────────────────
-async function forwardToWebhook(payload) {
-  try {
-    const res = await fetch(WEBHOOK_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-webhook-secret': WEBHOOK_SECRET || '' },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) { console.error(`❌ Webhook ${res.status}: ${await res.text()}`); return null; }
-    const result = await res.json();
-    console.log(`✅ Webhook [${payload.type}]:`, JSON.stringify(result).substring(0, 100));
-    return result;
-  } catch (err) { console.error(`❌ Webhook error: ${err.message}`); return null; }
 }
 
 // ── Discord client ────────────────────────────────────────────────────────────
@@ -712,13 +615,13 @@ client.once('clientReady', async (c) => {
     await ensureTicketPanel();
     await postOnlineMessage();
   }
-  console.log(`🎫 Helena v2.0.0 ready!`);
+  console.log('🎫 Helena v2.0.0 ready!');
 });
 
 // ── Interaction handler ───────────────────────────────────────────────────────
 client.on('interactionCreate', async (interaction) => {
 
-  // Map role selection
+  // Map roles
   if (interaction.isStringSelectMenu() && interaction.customId === 'map_roles') {
     await interaction.deferReply({ ephemeral: true });
     const { guild, member } = interaction;
@@ -735,7 +638,7 @@ client.on('interactionCreate', async (interaction) => {
     await interaction.editReply({ content: `✅ Map roles updated!\n🗺️ **Active Maps:** ${added.join(', ')}` });
   }
 
-  // Platform role selection
+  // Platform roles
   if (interaction.isStringSelectMenu() && interaction.customId === 'platform_roles') {
     await interaction.deferReply({ ephemeral: true });
     const { guild, member } = interaction;
@@ -746,7 +649,7 @@ client.on('interactionCreate', async (interaction) => {
     const platform = PLATFORMS.find(p => p.name === interaction.values[0]);
     const role     = platform ? guild.roles.cache.get(platform.roleId) : null;
     if (role) await member.roles.add(role).catch(() => {});
-    await interaction.editReply({ content: `✅ Platform role updated!\n${platform?.emoji || '🎮'} **Platform:** ${interaction.values[0]}` });
+    await interaction.editReply({ content: `✅ Platform updated!\n${platform?.emoji || '🎮'} **Platform:** ${interaction.values[0]}` });
   }
 
   // Ticket open buttons
@@ -754,10 +657,23 @@ client.on('interactionCreate', async (interaction) => {
     const key = interaction.customId.replace('open_ticket_', '');
     const cat = TICKET_CATEGORIES.find(c => c.key === key);
     if (!cat) return interaction.reply({ content: '❌ Unknown ticket category.', ephemeral: true });
+
+    const { guild, member } = interaction;
+    const existing = guild.channels.cache.find(c => c.name.startsWith(`open-${member.user.username.toLowerCase()}`));
+    if (existing) return interaction.reply({ content: `⚠️ You already have an open ticket in <#${existing.id}>!`, ephemeral: true });
+
     await interaction.deferReply({ ephemeral: true });
-    const result = await createTicketChannel(interaction.guild, interaction.member, cat);
-    if (result.existing) return interaction.editReply({ content: `⚠️ You already have an open ticket in <#${result.existing.id}>!` });
-    await interaction.editReply({ content: `✅ Ticket opened! Head to <#${result.channel.id}> to get help. 🦖` });
+    const result = await createTicketChannel(guild, member, cat);
+
+    if (result.channel) {
+      // Seed conversation and have Helena greet them based on category
+      conversationHistory[result.channel.id] = [
+        { role: 'user', content: `[${member.displayName}]: I need help with: ${cat.name}` }
+      ];
+      const fakeMsg = { channel: result.channel, member, content: `I need help with: ${cat.name}`, author: interaction.user };
+      await handleTicketAI(fakeMsg, guild, true);
+      await interaction.editReply({ content: `✅ Ticket opened! Head to <#${result.channel.id}> — Helena is already there. 🦖` });
+    }
   }
 
   // Close ticket
@@ -765,8 +681,12 @@ client.on('interactionCreate', async (interaction) => {
     await interaction.deferReply({ ephemeral: false });
     const channel = interaction.channel;
     const member  = interaction.member;
+
     await channel.setName(channel.name.replace('open-', 'closed-').replace('ticket-', 'closed-')).catch(() => {});
     await channel.permissionOverwrites.edit(member.id, { SendMessages: false }).catch(() => {});
+
+    escalatedTickets.delete(channel.id);
+    delete conversationHistory[channel.id];
 
     const closedEmbed = new EmbedBuilder()
       .setTitle('🔒  TICKET CLOSED')
@@ -776,12 +696,10 @@ client.on('interactionCreate', async (interaction) => {
     const deleteRow = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('ticket_delete').setLabel('Delete Ticket').setEmoji('🗑️').setStyle(ButtonStyle.Danger)
     );
-    await interaction.editReply({ embeds: [closedEmbed], components: [deleteRow] });
 
-    const ticket = activeTickets.get(channel.id);
-    if (ticket) { ticket.stage = 'closed'; activeTickets.set(channel.id, ticket); }
+    await interaction.editReply({ embeds: [closedEmbed], components: [deleteRow] });
     await sendMessage(ADMIN_LOGS_CHANNEL_ID,
-      `🔒 **[Ticket Closed]** <#${channel.id}> by <@${member.id}>${ticket ? ` | **${ticket.username}** | ${ticket.issueType}` : ''}`
+      `🔒 **[Ticket Closed]** <#${channel.id}> by <@${member.id}>`
     );
   }
 
@@ -799,40 +717,58 @@ client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
   const channelId = message.channel.id;
   const guild     = message.guild;
+  if (!guild) return;
 
-  // Active ticket channel — text conversation flow
-  if (activeTickets.has(channelId)) {
-    await handleTicketMessage(message);
-    return;
-  }
-
-  // #admin-console or #staff-chat — Helena AI brain (admins only)
+  // #admin-console or #staff-chat — admin AI brain
   if (channelId === ADMIN_CONSOLE_CHANNEL_ID || channelId === STAFF_CHAT_CHANNEL_ID) {
     const isAdmin = message.member.roles.cache.has(ADMIN_ROLE_ID) || message.member.roles.cache.has(ARK_ADMIN_ROLE_ID);
     if (!isAdmin) return;
-    await handleHelenaAI(message, guild);
+    await handleAdminAI(message, guild);
     return;
   }
 
-  // #support-ticket — auto ticket creation / message forwarding
+  // open-* ticket channels — Helena responds to players, ignores admins post-escalation
+  if (message.channel.name?.startsWith('open-')) {
+    const isAdmin = message.member.roles.cache.has(ADMIN_ROLE_ID) || message.member.roles.cache.has(ARK_ADMIN_ROLE_ID);
+    if (isAdmin && escalatedTickets.has(channelId)) return; // let admins handle it
+    if (!isAdmin) await handleTicketAI(message, guild, false);
+    return;
+  }
+
+  // #support-ticket — auto ticket creation + message forwarding
   if (channelId === SUPPORT_TRIGGER_CHANNEL_ID) {
     const originalContent = message.content;
     const member          = message.member;
+
     deleteMessage(channelId, message.id).catch(() => {});
 
     const existingChannel = guild.channels.cache.find(
       c => c.name.startsWith(`open-${member.user.username.toLowerCase()}`)
     );
+
     if (existingChannel) {
+      // Forward message into existing ticket
       const fwdEmbed = new EmbedBuilder()
-        .setDescription(`📨 **${member.displayName}** sent a message from <#${channelId}>:\n\n${originalContent}`)
+        .setDescription(`📨 **${member.displayName}** sent a new message:\n\n${originalContent}`)
         .setColor(COLORS.orange).setFooter({ text: 'Helena • Forwarded Message' }).setTimestamp();
       await existingChannel.send({ embeds: [fwdEmbed] });
+      // Have Helena respond to the forwarded message
+      conversationHistory[existingChannel.id] = conversationHistory[existingChannel.id] || [];
+      conversationHistory[existingChannel.id].push({ role: 'user', content: `[${member.displayName}]: ${originalContent}` });
+      const fakeMsg = { channel: existingChannel, member, content: originalContent, author: message.author };
+      await handleTicketAI(fakeMsg, guild, false);
       return;
     }
 
+    // Create new ticket
     const result = await createTicketChannel(guild, member, TICKET_CATEGORIES[0], originalContent);
     if (result.channel) {
+      // Seed history and have Helena respond immediately
+      conversationHistory[result.channel.id] = [
+        { role: 'user', content: `[${member.displayName}]: ${originalContent}` }
+      ];
+      const fakeMsg = { channel: result.channel, member, content: originalContent, author: message.author };
+      await handleTicketAI(fakeMsg, guild, true);
       await sendMessage(channelId, `🎫 <@${member.user.id}> — your ticket is open! Head to <#${result.channel.id}> 🦕`);
     }
     return;
@@ -843,7 +779,8 @@ client.on('messageCreate', async (message) => {
     if (!message.content.trim().toLowerCase().startsWith('!ai')) return;
     console.log(`📨 [#ai] ${message.author.username}: "${message.content.substring(0, 80)}"`);
     await forwardToWebhook({
-      type: 'message', id: message.id, channel_id: channelId, channel_name: message.channel.name,
+      type: 'message', id: message.id,
+      channel_id: channelId, channel_name: message.channel.name,
       content: message.content,
       author: { id: message.author.id, username: message.author.username, global_name: message.author.globalName, bot: false },
     });
