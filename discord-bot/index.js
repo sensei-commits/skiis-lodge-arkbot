@@ -269,6 +269,10 @@ const SLASH_COMMANDS = [
       { name: "map", description: "Filter by map name", type: ApplicationCommandOptionType.String, required: false },
     ],
   },
+  {
+    name: "help",
+    description: "What can Helena do? Shows all commands and features.",
+  },
 ];
 
 // ============================================================
@@ -652,7 +656,7 @@ async function postCommandsList(guild) {
           { name: "🤖  AI", value: "`!ai on/off` — toggle in any channel\n`!ai help` — capabilities\n**#🤖︱ai** always on" },
           { name: "🗺️  Servers", value: SERVERS.map(s => `\`${s.name}\``).join(", ") },
         )
-        .setFooter({ text: "Helena Walker — Skii's Lodge v2.6.0  •  All actions logged" })
+        .setFooter({ text: "Helena Walker — Skii's Lodge v2.7.0  •  All actions logged" })
         .setTimestamp(),
     ],
   });
@@ -1256,6 +1260,85 @@ async function handleTribes(interaction) {
   });
 }
 
+// ── Help command ─────────────────────────────────────────────
+async function handleHelp(interaction) {
+  const adminOk = isAdmin(interaction.member);
+  const lock    = "\*(admin only)\*";
+
+  const embed = new EmbedBuilder()
+    .setTitle("🦕  Meet Helena — What I Can Do")
+    .setColor(0x5865f2)
+    .setDescription(
+      "G'day! I'm **Helena Walker** — Skii's Lodge's resident naturalist AI.\n" +
+      "Named after the ARK Explorer herself, I keep this cluster ticking: " +
+      "monitoring tribe logs, answering questions, and helping your admin team wrangle 13 maps worth of prehistoric chaos. " +
+      "Here's everything in my field kit:\n\u200b"
+    )
+    .addFields(
+      {
+        name: "📢  Announcements & Messaging",
+        value: [
+          "**`/announce`** — post an announcement to any Discord channel",
+          "**`/broadcast`** — send an in-game RCON broadcast to a server " + lock,
+          "**`/server-message`** — send in-game chat to a server " + lock,
+        ].join("\n"),
+      },
+      {
+        name: "⚠️  Player Management " + lock,
+        value: [
+          "**`/warn`  `/kick`  `/ban`  `/unban`** — moderate players",
+          "**`/player-history`** — view warnings & ban record for any player",
+        ].join("\n"),
+      },
+      {
+        name: "🦖  Server & Cluster Info",
+        value: [
+          "**`/rates`** — live cluster rates (taming, breeding, XP, and more)",
+          "**`/tribes`** — active tribes across the cluster, grouped by map",
+          "**`/activity`** — recent tribe-log events; filterable by type & map",
+          "**`/server-save`** — force-save a world " + lock,
+        ].join("\n"),
+      },
+      {
+        name: "🧠  Memory " + lock,
+        value: [
+          "**`/remember`** — save a fact I'll carry into every conversation",
+          "**`/memory`** — view everything I currently remember",
+          "**`/forget`** — remove a memory by number",
+        ].join("\n"),
+      },
+      {
+        name: "💬  Text Commands",
+        value: [
+          "**`!sandbox`** — opens a private DM brainstorm; type `!submit <title>` to pitch to the team " + lock,
+          "**`!ai on / off`** — toggle my AI chat in any channel " + lock,
+          "**`!ai help`** — show capabilities in chat",
+        ].join("\n"),
+      },
+      {
+        name: "✨  Always Running (Automatic)",
+        value: [
+          "🔍 **Tribe Log Watcher** — I monitor every channel in the Tribe Data Logs category and ping admins on PvP kills, structure destruction, dino deaths, starvation, turret alerts, member departures, and tribe merges",
+          "🏰 **Tribe Roster** — built automatically from log activity (use `/tribes` to see it)",
+          "📡 **Server Status** — live BattleMetrics polling keeps the status board current every 5 minutes",
+          "⚙️ **Live Rates** — pulled from the cluster config and refreshed automatically",
+          "🤖 **AI Chat** — I answer ARK questions in **#🤖︱ai** (always on) and any channel where an admin has used `!ai on`",
+        ].join("\n"),
+      },
+      {
+        name: "\u200b",
+        value: adminOk
+          ? "You have **admin access** — all commands above are available to you. Let me know if you need anything! 🦕"
+          : "Commands marked *(admin only)* are reserved for staff. **`/rates`**, **`/tribes`**, **`/activity`**, **`/help`**, and the AI chat in **#🤖︱ai** are open to everyone!",
+      }
+    )
+    .setFooter({ text: "Helena Walker — Skii's Lodge v2.7.0  •  Naturalist AI & Cluster Manager" })
+    .setTimestamp();
+
+  await interaction.reply({ ephemeral: true, embeds: [embed] });
+}
+
+
 // ── Online message ────────────────────────────────────────────
 async function postOnlineMessage(guild) {
   for (const [id, name] of [[CHANNEL_IDS.adminConsole, "#admin-console"], [CHANNEL_IDS.staffChat, "#staff-chat"]]) {
@@ -1269,7 +1352,7 @@ async function postOnlineMessage(guild) {
           `📋 **Tribe Watcher:** ✅ Monitoring Tribe Data Logs category\n` +
           `🕐 **Started:** <t:${Math.floor(Date.now() / 1000)}:F>`
         )
-        .setFooter({ text: "Helena Walker — Skii's Lodge v2.6.0" })],
+        .setFooter({ text: "Helena Walker — Skii's Lodge v2.7.0" })],
     }).catch(() => {});
     console.log(`✅ Online message → ${name}`);
   }
@@ -1294,7 +1377,7 @@ client.once("ready", async () => {
   await postOnlineMessage(guild);
 
   setInterval(async () => { await fetchRates(); await fetchTribes(); await pollServers(); }, UPDATE_INTERVAL_MINUTES * 60 * 1000);
-  console.log("✅ Helena v2.6.0 setup complete!");
+  console.log("✅ Helena v2.7.0 setup complete!");
 });
 
 // ── INTERACTIONS ──────────────────────────────────────────────
@@ -1323,6 +1406,8 @@ client.on("interactionCreate", async (interaction) => {
   }
 
   if (!interaction.isChatInputCommand()) return;
+  // /help is open to everyone — handle it before the admin gate
+  if (interaction.commandName === "help") return handleHelp(interaction);
   if (!isAdmin(interaction.member)) return interaction.reply({ content: "❌ Admin role only.", ephemeral: true });
   await interaction.deferReply({ ephemeral: true });
 
@@ -1343,6 +1428,7 @@ client.on("interactionCreate", async (interaction) => {
       case "rates":          await handleRates(interaction);         break;
       case "activity":       await handleActivity(interaction);      break;
       case "tribes":         await handleTribes(interaction);        break;
+      case "help":           await handleHelp(interaction);          break;
       default: await interaction.editReply({ content: "Unknown command." });
     }
   } catch (err) {
@@ -1438,18 +1524,19 @@ client.on("messageCreate", async (message) => {
   }
 
   // ── !ai help ─────────────────────────────────────────────
-  if (lower === "!ai help") {
-    await message.reply([
-      "**🤖 Helena v2.6.0 — Capabilities**\n",
-      "**Server Info** — live rates, rules, 13 maps, wipe schedule, admins",
-      "**Game Knowledge** — taming, breeding, mutations, all maps, bosses, kibble",
-      "**Live Status** — which servers are online right now",
-      "**Tribe Watcher** — monitors ALL channels in Tribe Data Logs, pings admins on PvP/destruction/etc.",
-      "**`/activity`** — view recent tribe-log events | **`/tribes`** — active tribe roster",
-      "**Admin Commands** — `/warn`, `/kick`, `/ban`, `/announce`, `/rates`, `/remember` and more",
-      "**`!sandbox`** — private DM brainstorm → submit to #idea-review\n",
-      "**#🤖︱ai** is always on. `!ai on/off` toggles any other channel (admin only).",
-    ].join("\n"));
+  if (lower === "!ai help" || lower === "!help") {
+    await message.reply(
+      "**🦕 Helena Walker — Skii's Lodge Naturalist AI**\n\n" +
+      "Here's what I can do — use `/help` for the full formatted guide!\n\n" +
+      "**Open to Everyone**\n" +
+      "`/help` `/rates` `/tribes` `/activity` + AI chat in #🤖︱ai\n\n" +
+      "**Admin Only**\n" +
+      "`/announce` `/broadcast` `/server-message` — messaging\n" +
+      "`/warn` `/kick` `/ban` `/unban` `/player-history` — players\n" +
+      "`/server-save` `/remember` `/memory` `/forget` — tools\n" +
+      "`!sandbox` `!ai on/off` — text commands\n\n" +
+      "**Always Running:** tribe log watcher · live server status · live rates · AI chat"
+    );
     return;
   }
 
