@@ -67,6 +67,16 @@ const AI_PERSONALITY = [
   "Cluster: Skii's Lodge — 13 maps: Island, Center, Scorched Earth, Forglar, Aberration, Club Ark, Svartlfheim, Astraeos, Extinction, Volcano, Valguero, Lost Colony, Ragnarok.",
   "Admins: Skidogg, iNFAMOUS, Remi, Captain Rhynio.",
   "Server rules: PVE only. Turrets set to wild creatures only (inside base or TEK shield may be all targets). No building at spawn points. No blocking artifacts. Taming traps must be removed within 12 hours. Max tribe size: 7.",
+  "",
+  "CRITICAL — Honesty about data:",
+  "You have access to tribe-log events you've personally parsed and stored in memory since your last restart. That is ALL you have.",
+  "NEVER pretend to fetch, query, retrieve, or pull data from a database, API, or external source unless you are literally executing a function that does so.",
+  "NEVER narrate fake actions like 'let me pull that up', 'checking the database', 'retrieving logs', 'the system is not responding', etc.",
+  "If someone asks about tribe activity and you have relevant events in memory, report them directly.",
+  "If you have nothing for that tribe, map, or timeframe, say so plainly and honestly:",
+  "  e.g. 'I haven't captured any logged activity for Triumphant Titans since my last restart. I can only report events I've seen come through the tribe-log channels — I don't have access to full historical tribe data.'",
+  "It is always better to say 'I don't have that' than to imply you're fetching something you can't.",
+  "The same rule applies to player records, server stats, or any other data — only report what you actually have in context.",
 ].join("\n");
 
 // ── Role IDs ──────────────────────────────────────────────────
@@ -682,7 +692,7 @@ async function postCommandsList(guild) {
           { name: "🤖  AI", value: "`!ai on/off` — toggle in any channel\n`!ai help` — capabilities\n**#🤖︱ai** always on" },
           { name: "🗺️  Servers", value: SERVERS.map(s => `\`${s.name}\``).join(", ") },
         )
-        .setFooter({ text: "Helena Walker — Skii's Lodge v2.9.0  •  All actions logged" })
+        .setFooter({ text: "Helena Walker — Skii's Lodge v2.9.1  •  All actions logged" })
         .setTimestamp(),
     ],
   });
@@ -1397,7 +1407,7 @@ async function handleHelp(interaction) {
           : "Commands marked *(admin only)* are reserved for staff. **`/rates`**, **`/tribes`**, **`/activity`**, **`/help`**, and the AI chat in **#🤖︱ai** are open to everyone!",
       }
     )
-    .setFooter({ text: "Helena Walker — Skii's Lodge v2.9.0  •  Naturalist AI & Cluster Manager" })
+    .setFooter({ text: "Helena Walker — Skii's Lodge v2.9.1  •  Naturalist AI & Cluster Manager" })
     .setTimestamp();
 
   await interaction.reply({ ephemeral: true, embeds: [embed] });
@@ -1417,7 +1427,7 @@ async function postOnlineMessage(guild) {
           `📋 **Tribe Watcher:** ✅ Monitoring Tribe Data Logs category\n` +
           `🕐 **Started:** <t:${Math.floor(Date.now() / 1000)}:F>`
         )
-        .setFooter({ text: "Helena Walker — Skii's Lodge v2.9.0" })],
+        .setFooter({ text: "Helena Walker — Skii's Lodge v2.9.1" })],
     }).catch(() => {});
     console.log(`✅ Online message → ${name}`);
   }
@@ -1442,7 +1452,7 @@ client.once("ready", async () => {
   await postOnlineMessage(guild);
 
   setInterval(async () => { await fetchRates(); await fetchTribes(); await pollServers(); }, UPDATE_INTERVAL_MINUTES * 60 * 1000);
-  console.log("✅ Helena v2.9.0 setup complete!");
+  console.log("✅ Helena v2.9.1 setup complete!");
 });
 
 // ── INTERACTIONS ──────────────────────────────────────────────
