@@ -656,7 +656,7 @@ async function postCommandsList(guild) {
           { name: "🤖  AI", value: "`!ai on/off` — toggle in any channel\n`!ai help` — capabilities\n**#🤖︱ai** always on" },
           { name: "🗺️  Servers", value: SERVERS.map(s => `\`${s.name}\``).join(", ") },
         )
-        .setFooter({ text: "Helena Walker — Skii's Lodge v2.7.0  •  All actions logged" })
+        .setFooter({ text: "Helena Walker — Skii's Lodge v2.8.0  •  All actions logged" })
         .setTimestamp(),
     ],
   });
@@ -929,70 +929,88 @@ async function handleIdeaDiscuss(interaction) {
 }
 
 // ── Tribe Log Watcher ─────────────────────────────────────────
-function extractLogText(message) {
-  let text = message.content || "";
-  for (const e of message.embeds || []) {
-    if (e.title)       text += "\n" + e.title;
-    if (e.description) text += "\n" + e.description;
-    for (const f of e.fields || []) text += `\n${f.name}: ${f.value}`;
-  }
-  return text.trim();
+// Parses the exact ASA-Bot webhook format:
+// [Tribe of NAME] @ [MAP] [Day D, HH:MM:SS] EVENT TEXT
+//
+// IMPORTANT: Logs are posted by the ASA-Bot webhook (a bot/webhook user).
+// We must NOT skip bot messages in tribe-log channels.
+// We skip only Helena's own messages.
+
+const TRIBE_LOG_LINE_RE = /^\[Tribe of ([^\]]+)\]\s*@\s*\[([^\]]+)\]\s*\[Day ([\d,: ]+)\]\s*(.+)$/;
+
+// Strip <RichColor ...> and </> tags from event text
+function stripRichColor(text) {
+  return text
+    .replace(/<RichColor[^>]*>/gi, '')
+    .replace(/<\/>/gi, '')
+    .trim();
 }
 
-function extractTribeName(message, text) {
-  for (const e of message.embeds || []) {
-    const a = e.author?.name?.trim();
-    if (a && a.length >= 2 && a.length <= 48) return a;
-  }
-  const patterns = [/tribe of ([^\n,!.(\-]{2,40})/i, /tribe[:\s]+([A-Za-z0-9 _'\[\]]{2,40})/i];
-  for (const re of patterns) {
-    const m = (text || "").match(re);
-    if (m && m[1]) return m[1].trim().replace(/\s+-.*$/, "").trim();
+// Parse one log line into { tribe, map, dayTime, event } or null
+function parseLogLine(text) {
+  // Try the canonical single-line format first
+  const m = TRIBE_LOG_LINE_RE.exec(text.trim());
+  if (m) {
+    return {
+      tribe:   m[1].trim(),
+      map:     m[2].trim(),
+      dayTime: m[3].trim(),
+      event:   stripRichColor(m[4].trim()),
+    };
   }
   return null;
 }
 
-function recordTribe(name, map) {
-  if (!name) return;
-  if (!tribesSeen[name]) tribesSeen[name] = { maps: [], lastSeen: null, count: 0 };
-  const t = tribesSeen[name];
+// Extract all text from a message (content + embed text)
+function extractAllText(message) {
+  const parts = [];
+  if (message.content) parts.push(message.content);
+  for (const e of message.embeds || []) {
+    if (e.title)       parts.push(e.title);
+    if (e.description) parts.push(e.description);
+    for (const f of e.fields || []) parts.push(f.name + ': ' + f.value);
+  }
+  return parts.join('\n');
+}
+
+// Categorize based on event text
+function categorizeEvent(event) {
+  const lower = event.toLowerCase();
+  for (const rule of TRIBE_EVENTS) {
+    try { if (rule.test(lower)) return rule; } catch {}
+  }
+  return null;
+}
+
+function recordTribeEntry(tribe, map) {
+  if (!tribe) return;
+  if (!tribesSeen[tribe]) tribesSeen[tribe] = { maps: [], lastSeen: null, count: 0 };
+  const t = tribesSeen[tribe];
   if (map && !t.maps.includes(map)) t.maps.push(map);
   t.lastSeen = new Date().toISOString();
   t.count   += 1;
 }
 
-// "ragnarok-tribe-logs" → "Ragnarok"
-function mapFromChannel(name) {
-  const cleaned = (name || "")
-    .replace(/tribe-?logs?/gi, "").replace(/[^a-z\s-]/gi, "")
-    .replace(/-/g, " ").trim();
-  return cleaned ? cleaned.replace(/\b\w/g, c => c.toUpperCase()).trim() : "Unknown";
-}
-
-function extractActor(text) {
-  const m = text.match(/([A-Za-z0-9_\[\] ]{2,32})\s*-\s*Lvl\s*\d+/i);
-  return m ? m[1].trim() : null;
-}
-
-function categorize(text) {
-  for (const rule of TRIBE_EVENTS) {
-    try { if (rule.test(text)) return rule; } catch {}
-  }
-  return null;
-}
-
-function recordEvent(evt) {
-  recentEvents.push(evt);
+function recordEventEntry(rule, tribe, map, dayTime, event, channelId) {
+  const entry = {
+    type:      rule.key,
+    label:     rule.label,
+    tribe:     tribe || 'Unknown',
+    map:       map   || 'Unknown',
+    dayTime:   dayTime || '',
+    text:      event.slice(0, 300),
+    channelId,
+    at:        new Date().toISOString(),
+  };
+  recentEvents.push(entry);
   if (recentEvents.length > RECENT_EVENTS_MAX) recentEvents.splice(0, recentEvents.length - RECENT_EVENTS_MAX);
   saveData();
 }
 
-async function pingAdmins(message, rule, map, text) {
+async function pingAdmins(message, rule, tribe, map, dayTime, event) {
   const guild   = message.guild;
   const alertCh = findChannel(guild, TRIBE_ALERT_CHANNEL);
   if (!alertCh) return;
-  const actor   = extractActor(text);
-  // Always ping BOTH admin roles as per standing instructions
   const mention = `<@&1242319080760467557> <@&1242319323145166868>`;
 
   await alertCh.send({
@@ -1001,53 +1019,71 @@ async function pingAdmins(message, rule, map, text) {
       .setTitle(rule.label)
       .setColor(0xff0000)
       .addFields(
-        { name: "Map",       value: map,                         inline: true },
-        { name: "Source",    value: `<#${message.channel.id}>`, inline: true },
-        ...(actor ? [{ name: "Who", value: actor, inline: true }] : []),
-        { name: "Log Entry", value: (text || "(no text)").slice(0, 1000) },
+        { name: 'Tribe',   value: tribe   || 'Unknown', inline: true },
+        { name: 'Map',     value: map     || 'Unknown', inline: true },
+        { name: 'Day/Time', value: dayTime || 'Unknown', inline: true },
+        { name: 'Source',  value: `<#${message.channel.id}>`, inline: true },
+        { name: 'Event',   value: event.slice(0, 1000) },
       )
-      .setFooter({ text: "Helena tribe-log watcher" })
+      .setFooter({ text: 'Helena tribe-log watcher' })
       .setTimestamp()],
   }).catch(() => {});
 }
 
 async function watchTribeLog(message) {
   if (!TRIBE_WATCH_ENABLED || !message.guild) return;
-  const chName   = message.channel?.name?.toLowerCase() || "";
-  const parentId = message.channel?.parentId || "";
 
-  // Monitor by category ID (all channels in Tribe Data Logs) OR name fallback
-  const isTribeLogChannel = parentId === TRIBE_LOG_CATEGORY_ID || chName.includes("tribe-log");
+  // Skip Helena's own messages — but DO process other bots/webhooks (ASA-Bot posts logs)
+  if (message.author.id === client.user?.id) return;
+
+  const parentId = message.channel?.parentId || '';
+  const chName   = message.channel?.name?.toLowerCase() || '';
+
+  // Only process channels inside the Tribe Data Logs category OR named *tribe-log*
+  const isTribeLogChannel = parentId === TRIBE_LOG_CATEGORY_ID || chName.includes('tribe-log');
   if (!isTribeLogChannel) return;
 
-  const text = extractLogText(message);
-  if (!text) return;
+  const rawText = extractAllText(message);
+  if (!rawText.trim()) return;
 
-  const rule = categorize(text);
-  if (!rule) return;
+  // Process every line — each line may be a separate log entry
+  const lines = rawText.split(/\r?\n/);
+  let processed = 0;
 
-  const map = mapFromChannel(chName);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
 
-  // Always record silently
-  recordEvent({
-    type: rule.key, label: rule.label, map,
-    text: text.slice(0, 300), channelId: message.channel.id,
-    at: new Date().toISOString(),
-  });
+    const parsed = parseLogLine(trimmed);
+    if (!parsed) continue; // not a recognised log line
 
-  // Derive tribe roster from logs
-  recordTribe(extractTribeName(message, text), map);
+    const { tribe, map, dayTime, event } = parsed;
+    const rule = categorizeEvent(event);
 
-  // Ping admins only for high-impact events with per-channel+type cooldown
-  if (rule.ping) {
-    const cdKey = `${message.channel.id}:${rule.key}`;
-    const last  = tribeAlertCooldown.get(cdKey) || 0;
-    if (Date.now() - last >= TRIBE_COOLDOWN_MS) {
-      tribeAlertCooldown.set(cdKey, Date.now());
-      await pingAdmins(message, rule, map, text);
+    // Always update the tribe roster from the embedded tribe+map
+    recordTribeEntry(tribe, map);
+
+    // Record event (even if uncategorized, store as generic)
+    const effectiveRule = rule || { key: 'other', label: '📝 Log Entry', ping: false };
+    recordEventEntry(effectiveRule, tribe, map, dayTime, event, message.channel.id);
+    processed++;
+
+    // Ping admins for high-impact events with cooldown
+    if (rule && rule.ping) {
+      const cdKey = `${message.channel.id}:${rule.key}:${tribe}`;
+      const last  = tribeAlertCooldown.get(cdKey) || 0;
+      if (Date.now() - last >= TRIBE_COOLDOWN_MS) {
+        tribeAlertCooldown.set(cdKey, Date.now());
+        await pingAdmins(message, rule, tribe, map, dayTime, event);
+      }
     }
   }
+
+  if (processed > 0) {
+    console.log(`[TribeWatch] ${processed} entr${processed === 1 ? 'y' : 'ies'} parsed from #${message.channel.name}`);
+  }
 }
+
 
 // ── Slash command handlers ────────────────────────────────────
 async function handleAnnounce(interaction) {
@@ -1332,7 +1368,7 @@ async function handleHelp(interaction) {
           : "Commands marked *(admin only)* are reserved for staff. **`/rates`**, **`/tribes`**, **`/activity`**, **`/help`**, and the AI chat in **#🤖︱ai** are open to everyone!",
       }
     )
-    .setFooter({ text: "Helena Walker — Skii's Lodge v2.7.0  •  Naturalist AI & Cluster Manager" })
+    .setFooter({ text: "Helena Walker — Skii's Lodge v2.8.0  •  Naturalist AI & Cluster Manager" })
     .setTimestamp();
 
   await interaction.reply({ ephemeral: true, embeds: [embed] });
@@ -1352,7 +1388,7 @@ async function postOnlineMessage(guild) {
           `📋 **Tribe Watcher:** ✅ Monitoring Tribe Data Logs category\n` +
           `🕐 **Started:** <t:${Math.floor(Date.now() / 1000)}:F>`
         )
-        .setFooter({ text: "Helena Walker — Skii's Lodge v2.7.0" })],
+        .setFooter({ text: "Helena Walker — Skii's Lodge v2.8.0" })],
     }).catch(() => {});
     console.log(`✅ Online message → ${name}`);
   }
@@ -1377,7 +1413,7 @@ client.once("ready", async () => {
   await postOnlineMessage(guild);
 
   setInterval(async () => { await fetchRates(); await fetchTribes(); await pollServers(); }, UPDATE_INTERVAL_MINUTES * 60 * 1000);
-  console.log("✅ Helena v2.7.0 setup complete!");
+  console.log("✅ Helena v2.8.0 setup complete!");
 });
 
 // ── INTERACTIONS ──────────────────────────────────────────────
@@ -1439,12 +1475,12 @@ client.on("interactionCreate", async (interaction) => {
 
 // ── MESSAGES ──────────────────────────────────────────────────
 client.on("messageCreate", async (message) => {
-  // Tribe watcher runs on ALL messages (including bots) except Helena herself
-  if (message.author.id !== client.user?.id) {
-    watchTribeLog(message).catch(() => {});
-  }
+  // Tribe watcher runs FIRST on ALL messages including bots/webhooks (ASA-Bot posts logs)
+  // The watcher internally skips Helena's own messages
+  watchTribeLog(message).catch(() => {});
 
-  if (message.author.bot) return;
+  // Skip all bots/webhooks for everything else (AI, commands, DMs, etc.)
+  if (message.author.bot || message.webhookId) return;
 
   // ── DM sandbox ───────────────────────────────────────────
   if (!message.guild) {
