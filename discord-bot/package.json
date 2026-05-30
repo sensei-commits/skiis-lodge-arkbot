@@ -9,6 +9,8 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.20.0",
     "discord.js": "^14.14.1",
-    "node-fetch": "^2.7.0"
+    "node-fetch": "^2.7.0",
+    "pg": "^8.11.3",
+    "rcon-client": "^4.2.3"
   }
 }
