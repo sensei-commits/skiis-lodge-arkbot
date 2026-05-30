@@ -437,6 +437,32 @@ function isAdmin(member) {
   return member.permissions?.has(PermissionFlagsBits.Administrator) ?? false;
 }
 
+
+// ── Display name helpers ──────────────────────────────────────
+// Always prefer server nickname (displayName) over username/tag.
+// Pass a guild + userId to get the member's display name.
+// Falls back gracefully if the member can't be fetched.
+
+async function getDisplayName(guild, userOrMember) {
+  if (!userOrMember) return 'Unknown';
+  // Already a GuildMember
+  if (userOrMember.displayName) return userOrMember.displayName;
+  // It's a User object — fetch the member
+  try {
+    const member = await guild.members.fetch(userOrMember.id);
+    return member.displayName;
+  } catch {
+    return userOrMember.username || userOrMember.tag || 'Unknown';
+  }
+}
+
+// Synchronous version for cases where we already have the member cached
+function displayName(memberOrUser) {
+  if (!memberOrUser) return 'Unknown';
+  if (memberOrUser.displayName) return memberOrUser.displayName;   // GuildMember
+  return memberOrUser.username || memberOrUser.tag || 'Unknown';   // User fallback
+}
+
 // ── Channel helpers ───────────────────────────────────────────
 function findChannel(guild, nameFragment) {
   return guild.channels.cache.find(c =>
@@ -656,7 +682,7 @@ async function postCommandsList(guild) {
           { name: "🤖  AI", value: "`!ai on/off` — toggle in any channel\n`!ai help` — capabilities\n**#🤖︱ai** always on" },
           { name: "🗺️  Servers", value: SERVERS.map(s => `\`${s.name}\``).join(", ") },
         )
-        .setFooter({ text: "Helena Walker — Skii's Lodge v2.8.0  •  All actions logged" })
+        .setFooter({ text: "Helena Walker — Skii's Lodge v2.9.0  •  All actions logged" })
         .setTimestamp(),
     ],
   });
@@ -713,7 +739,7 @@ async function createTicket(interaction) {
   const ticketCh = await guild.channels.create({
     name: `🎫︱ticket-${ticketNum}`, type: ChannelType.GuildText,
     parent: category.id, permissionOverwrites: perms,
-    topic: `Ticket #${ticketNum} — opened by ${member.user.tag}`,
+    topic: `Ticket #${ticketNum} — opened by ${displayName(member)}`,
   });
   openTickets.set(ticketCh.id, { userId: member.id, ticketNum });
   saveData();
@@ -742,13 +768,13 @@ async function closeTicket(interaction) {
   if (!closer) { try { closer = await guild.members.fetch(interaction.user.id); } catch {} }
   const isOwner = info && info.userId === interaction.user.id;
   if (!isOwner && !isStaff(closer)) return interaction.reply({ content: "❌ Only the ticket owner or staff can close this.", ephemeral: true });
-  const closerTag = closer?.user?.tag || interaction.user.tag;
+  const closerTag = displayName(closer) || interaction.user.username;
 
   let transcript = `Ticket #${ticketNum} — Closed by ${closerTag}\nDate: ${new Date().toISOString()}\n${"─".repeat(60)}\n`;
   try {
     const msgs   = await ch.messages.fetch({ limit: 100 });
     const sorted = [...msgs.values()].reverse();
-    for (const m of sorted) transcript += `[${m.createdAt.toISOString().slice(0, 16)}] ${m.author.tag}: ${m.content}\n`;
+    for (const m of sorted) transcript += `[${m.createdAt.toISOString().slice(0, 16)}] ${m.member?.displayName ?? m.author.username}: ${m.content}\n`;
   } catch {}
 
   const transcriptsCh = guild.channels.cache.get(CHANNEL_IDS.ticketTranscript);
@@ -875,6 +901,9 @@ async function summarizeBrainstorm(history) {
 async function submitIdea(user, session, title) {
   const guild    = client.guilds.cache.get(session.guildId);
   if (!guild) return user.send("❌ Could not find the server to submit to.");
+  // Fetch guild member to get server nickname
+  let submitterName = user.username;
+  try { const m = await guild.members.fetch(user.id); submitterName = m.displayName; } catch {}
   const reviewCh = findChannel(guild, "idea-review");
   if (!reviewCh) return user.send("❌ #idea-review not found.");
 
@@ -893,12 +922,12 @@ async function submitIdea(user, session, title) {
   const msg = await reviewCh.send({
     embeds: [new EmbedBuilder().setTitle(`💡  ${title}`).setColor(0xffc83d)
       .setDescription(body).addFields({ name: "Status", value: "🕓 Pending", inline: true })
-      .setFooter({ text: `Submitted by ${user.tag}` }).setTimestamp()],
+      .setFooter({ text: `Submitted by ${submitterName}` }).setTimestamp()],
     components: [row],
   });
   await user.send(`✅ Idea **"${title}"** submitted to <#${reviewCh.id}>.`);
   await logAction(guild, 0xffc83d, "💡 Idea Submitted", [
-    { name: "By", value: user.tag, inline: true }, { name: "Title", value: title, inline: true }, { name: "Review", value: `[Jump](${msg.url})` },
+    { name: "By", value: submitterName, inline: true }, { name: "Title", value: title, inline: true }, { name: "Review", value: `[Jump](${msg.url})` },
   ]);
 }
 
@@ -908,7 +937,7 @@ async function handleIdeaDecision(interaction, decision) {
   if (!original) return;
   const isApprove = decision === "approve";
   const newEmbed  = EmbedBuilder.from(original).setColor(isApprove ? 0x1ec864 : 0xff0000)
-    .spliceFields(0, 1, { name: "Status", value: isApprove ? `✅ Approved by ${interaction.user.tag}` : `❌ Rejected by ${interaction.user.tag}`, inline: true });
+    .spliceFields(0, 1, { name: "Status", value: isApprove ? `✅ Approved by ${displayName(interaction.member)}` : `❌ Rejected by ${displayName(interaction.member)}`, inline: true });
   await interaction.update({
     embeds: [newEmbed],
     components: [new ActionRowBuilder().addComponents(
@@ -1093,7 +1122,7 @@ async function handleAnnounce(interaction) {
   await channel.send(ping ? `@everyone\n${message}` : message);
   await interaction.editReply({ content: `✅ Posted in <#${channel.id}>`, ephemeral: true });
   await logAnnouncement(interaction.guild, [
-    { name: "Admin", value: interaction.user.tag, inline: true }, { name: "Channel", value: `<#${channel.id}>`, inline: true },
+    { name: "Admin", value: displayName(interaction.member), inline: true }, { name: "Channel", value: `<#${channel.id}>`, inline: true },
     { name: "Pinged", value: ping ? "Yes" : "No", inline: true }, { name: "Message", value: message },
   ]);
 }
@@ -1104,7 +1133,7 @@ async function handleBroadcast(interaction) {
   const results = await sendRconMany(server, `Broadcast ${message}`);
   await interaction.editReply({ content: `📡 Broadcast:\n${rconSummary(results)}`, ephemeral: true });
   await logAction(interaction.guild, 0x5865f2, "📡 Broadcast", [
-    { name: "Admin", value: interaction.user.tag, inline: true }, { name: "Server", value: server, inline: true }, { name: "Message", value: message },
+    { name: "Admin", value: displayName(interaction.member), inline: true }, { name: "Server", value: server, inline: true }, { name: "Message", value: message },
   ]);
 }
 
@@ -1113,12 +1142,12 @@ async function handleWarn(interaction) {
   const server = interaction.options.getString("server");
   const reason = interaction.options.getString("reason");
   if (!warnRecords.has(player)) warnRecords.set(player, []);
-  warnRecords.get(player).push({ reason, admin: interaction.user.tag, server, date: new Date().toISOString() });
+  warnRecords.get(player).push({ reason, admin: displayName(interaction.member), server, date: new Date().toISOString() });
   saveData();
   const r = await sendRcon(server, `Broadcast WARNING issued to ${player}: ${reason}`);
   await interaction.editReply({ content: `⚠️ Warning issued to **${player}**. RCON: ${r.success ? "✅" : `❌ ${r.error}`}`, ephemeral: true });
   await logPlayerAction(interaction.guild, 0xffa500, "⚠️ Player Warning", [
-    { name: "Admin", value: interaction.user.tag, inline: true }, { name: "Player", value: player, inline: true },
+    { name: "Admin", value: displayName(interaction.member), inline: true }, { name: "Player", value: player, inline: true },
     { name: "Server", value: server, inline: true }, { name: "Reason", value: reason },
     { name: "Total Warnings", value: String(warnRecords.get(player).length), inline: true },
   ]);
@@ -1131,7 +1160,7 @@ async function handleKick(interaction) {
   const results = await sendRconMany(server, `KickPlayer ${player}`);
   await interaction.editReply({ content: `👢 Kick:\n${rconSummary(results)}`, ephemeral: true });
   await logPlayerAction(interaction.guild, 0xff6b00, "👢 Player Kicked", [
-    { name: "Admin", value: interaction.user.tag, inline: true }, { name: "Player", value: player, inline: true },
+    { name: "Admin", value: displayName(interaction.member), inline: true }, { name: "Player", value: player, inline: true },
     { name: "Server", value: server, inline: true }, { name: "Reason", value: reason },
   ]);
 }
@@ -1141,12 +1170,12 @@ async function handleBan(interaction) {
   const server   = interaction.options.getString("server");
   const reason   = interaction.options.getString("reason");
   const duration = interaction.options.getString("duration") ?? "Permanent";
-  banRecords.set(player, { reason, admin: interaction.user.tag, server, duration, date: new Date().toISOString() });
+  banRecords.set(player, { reason, admin: displayName(interaction.member), server, duration, date: new Date().toISOString() });
   saveData();
   const results = await sendRconMany(server, `BanPlayer ${player}`);
   await interaction.editReply({ content: `🔨 Ban:\n${rconSummary(results)}`, ephemeral: true });
   await logPlayerAction(interaction.guild, 0xff0000, "🔨 Player Banned", [
-    { name: "Admin", value: interaction.user.tag, inline: true }, { name: "Player", value: player, inline: true },
+    { name: "Admin", value: displayName(interaction.member), inline: true }, { name: "Player", value: player, inline: true },
     { name: "Server", value: server, inline: true }, { name: "Duration", value: duration, inline: true }, { name: "Reason", value: reason },
   ]);
 }
@@ -1158,7 +1187,7 @@ async function handleUnban(interaction) {
   const results = await sendRconMany(server, `UnbanPlayer ${player}`);
   await interaction.editReply({ content: `✅ Unban:\n${rconSummary(results)}`, ephemeral: true });
   await logPlayerAction(interaction.guild, 0x00cc44, "✅ Player Unbanned", [
-    { name: "Admin", value: interaction.user.tag, inline: true }, { name: "Player", value: player, inline: true }, { name: "Server", value: server, inline: true },
+    { name: "Admin", value: displayName(interaction.member), inline: true }, { name: "Player", value: player, inline: true }, { name: "Server", value: server, inline: true },
   ]);
 }
 
@@ -1181,7 +1210,7 @@ async function handleServerSave(interaction) {
   const results = await sendRconMany(server, "SaveWorld");
   await interaction.editReply({ content: `💾 Save:\n${rconSummary(results)}`, ephemeral: true });
   await logAction(interaction.guild, 0x1ec864, "💾 World Saved", [
-    { name: "Admin", value: interaction.user.tag, inline: true }, { name: "Server", value: server, inline: true },
+    { name: "Admin", value: displayName(interaction.member), inline: true }, { name: "Server", value: server, inline: true },
   ]);
 }
 
@@ -1194,11 +1223,11 @@ async function handleServerMessage(interaction) {
 
 async function handleRemember(interaction) {
   const fact = interaction.options.getString("fact");
-  longTermMemory.push({ text: fact, addedBy: interaction.user.tag, date: new Date().toISOString() });
+  longTermMemory.push({ text: fact, addedBy: displayName(interaction.member), date: new Date().toISOString() });
   saveData();
   await interaction.editReply({ content: `🧠 Got it — I'll remember: *"${fact}"*`, ephemeral: true });
   await logAction(interaction.guild, 0x9b59b6, "🧠 Memory Added", [
-    { name: "Added by", value: interaction.user.tag, inline: true }, { name: "Fact", value: fact },
+    { name: "Added by", value: displayName(interaction.member), inline: true }, { name: "Fact", value: fact },
   ]);
 }
 
@@ -1368,7 +1397,7 @@ async function handleHelp(interaction) {
           : "Commands marked *(admin only)* are reserved for staff. **`/rates`**, **`/tribes`**, **`/activity`**, **`/help`**, and the AI chat in **#🤖︱ai** are open to everyone!",
       }
     )
-    .setFooter({ text: "Helena Walker — Skii's Lodge v2.8.0  •  Naturalist AI & Cluster Manager" })
+    .setFooter({ text: "Helena Walker — Skii's Lodge v2.9.0  •  Naturalist AI & Cluster Manager" })
     .setTimestamp();
 
   await interaction.reply({ ephemeral: true, embeds: [embed] });
@@ -1388,7 +1417,7 @@ async function postOnlineMessage(guild) {
           `📋 **Tribe Watcher:** ✅ Monitoring Tribe Data Logs category\n` +
           `🕐 **Started:** <t:${Math.floor(Date.now() / 1000)}:F>`
         )
-        .setFooter({ text: "Helena Walker — Skii's Lodge v2.8.0" })],
+        .setFooter({ text: "Helena Walker — Skii's Lodge v2.9.0" })],
     }).catch(() => {});
     console.log(`✅ Online message → ${name}`);
   }
@@ -1413,7 +1442,7 @@ client.once("ready", async () => {
   await postOnlineMessage(guild);
 
   setInterval(async () => { await fetchRates(); await fetchTribes(); await pollServers(); }, UPDATE_INTERVAL_MINUTES * 60 * 1000);
-  console.log("✅ Helena v2.8.0 setup complete!");
+  console.log("✅ Helena v2.9.0 setup complete!");
 });
 
 // ── INTERACTIONS ──────────────────────────────────────────────
@@ -1521,7 +1550,7 @@ client.on("messageCreate", async (message) => {
 
   // ── !sandbox ─────────────────────────────────────────────
   if (lower === "!sandbox") {
-    console.log(`[Sandbox] triggered by ${message.author.tag}`);
+    console.log(`[Sandbox] triggered by ${message.member?.displayName ?? message.author.username}`);
     let member = message.member;
     if (!member) { try { member = await guild.members.fetch(message.author.id); } catch {} }
     if (!isAdmin(member)) return message.reply("❌ Only admins can use the sandbox.");
@@ -1590,7 +1619,7 @@ client.on("messageCreate", async (message) => {
 
   try {
     await message.channel.sendTyping();
-    const reply = await getAiResponse(chId, message.content, message.author.username);
+    const reply = await getAiResponse(chId, message.content, message.member?.displayName ?? message.author.username);
     if (reply.length <= 2000) {
       await message.reply(reply);
     } else {
