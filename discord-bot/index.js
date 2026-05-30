@@ -549,7 +549,7 @@ async function postCommandsList(guild) {
           { name: "🤖  AI", value: "`!ai on/off` — toggle AI in current channel (admin only).\n`!ai help` — show capabilities.\n**#🤖︱ai** is always on for everyone." },
           { name: "🗺️  Servers", value: SERVERS.map(s => `\`${s.name}\``).join(", ") },
         )
-        .setFooter({ text: "Helena — Skii's Lodge v2.4.0  •  All actions logged automatically" })
+        .setFooter({ text: "Helena — Skii's Lodge v2.5.0  •  All actions logged automatically" })
         .setTimestamp(),
     ],
   });
@@ -864,10 +864,18 @@ async function evaluateTribeLog(text) {
   } catch { return { concerning: false }; }
 }
 
+// Tribe Data Logs category ID — monitor ALL channels inside it
+const TRIBE_LOG_CATEGORY_ID = "1509765536643285022";
+
 async function watchTribeLog(message) {
   if (!TRIBE_WATCH_ENABLED || !message.guild) return;
-  const name = message.channel?.name?.toLowerCase() || "";
-  if (!name.includes("tribe-log")) return;
+  const name     = message.channel?.name?.toLowerCase() || "";
+  const parentId = message.channel?.parentId || "";
+  // Match by category ID (catches all channels inside Tribe Data Logs)
+  // OR by channel name containing "tribe-log" (fallback)
+  const isTribeLogChannel = parentId === TRIBE_LOG_CATEGORY_ID || name.includes("tribe-log");
+  if (!isTribeLogChannel) return;
+  console.log(`[TribeWatch] Monitoring message in #${message.channel.name} (category: ${parentId})`);
   const text  = extractLogText(message);
   if (!text) return;
   const lower = text.toLowerCase();
@@ -880,7 +888,7 @@ async function watchTribeLog(message) {
   const alertCh = findChannel(message.guild, TRIBE_ALERT_CHANNEL);
   if (!alertCh) return;
   await alertCh.send({
-    content: `🚨 <@&${ROLES.admin}> — concerning tribe log activity`,
+    content: `🚨 <@&1242319080760467557> <@&1242319323145166868> — concerning tribe log activity`,
     embeds: [new EmbedBuilder().setTitle("🚨 Tribe Log Alert").setColor(0xff0000)
       .addFields(
         { name: "Source",    value: `<#${message.channel.id}>`, inline: true },
@@ -1068,7 +1076,7 @@ async function postOnlineMessage(guild) {
           `🕐 **Started:** <t:${Math.floor(Date.now() / 1000)}:F>\n\n` +
           `*Talk to me naturally in admin channels — ARK questions, polls, player issues.*`
         )
-        .setFooter({ text: "Helena Walker — Skii's Lodge v2.4.0" })],
+        .setFooter({ text: "Helena Walker — Skii's Lodge v2.5.0" })],
     }).catch(err => console.error(`❌ Online msg to ${name}: ${err.message}`));
     console.log(`✅ Online message → ${name}`);
   }
@@ -1092,7 +1100,7 @@ client.once("ready", async () => {
   await postOnlineMessage(guild);
 
   setInterval(async () => { await fetchRates(); await pollServers(); }, UPDATE_INTERVAL_MINUTES * 60 * 1000);
-  console.log("✅ Helena v2.4.0 setup complete!");
+  console.log("✅ Helena v2.5.0 setup complete!");
 });
 
 // ── INTERACTIONS ──────────────────────────────────────────────
@@ -1242,7 +1250,7 @@ client.on("messageCreate", async (message) => {
   // ── !ai help ─────────────────────────────────────────────
   if (lower === "!ai help") {
     await message.reply([
-      "**🤖 Helena v2.4.0 — Capabilities**",
+      "**🤖 Helena v2.5.0 — Capabilities**",
       "",
       "**Server Info** — rates (live), rules, 13 maps, wipe schedule, admins",
       "**Game Knowledge** — taming, breeding, mutations, all maps, bosses, kibble, TEK",
