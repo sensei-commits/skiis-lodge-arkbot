@@ -40,11 +40,15 @@ const CLIENT_ID         = process.env.DISCORD_CLIENT_ID || "1507730299356708984"
 const GUILD_ID          = "636832636752625664";
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 
-const DYNAMIC_CONFIG_URL = "https://skiilodge.asa-bot.info/api/dynamicConfig/server/898e4691-fbac-4e87-9c50-340dff4167f6/63d2bd1d-a52e-4606-9869-7fd363dfc599";
+const DYNAMIC_CONFIG_URL    = "https://skiilodge.asa-bot.info/api/dynamicConfig/server/898e4691-fbac-4e87-9c50-340dff4167f6/63d2bd1d-a52e-4606-9869-7fd363dfc599";
 const UPDATE_INTERVAL_MINUTES = 5;
 
 const TRIBE_WATCH_ENABLED = true;
 const TRIBE_ALERT_CHANNEL = "helena-logs";
+
+// ASA-Bot tribe roster (optional — leave blank until you have the endpoint)
+const ASA_API_KEY    = process.env.ASA_API_KEY    || "";
+const ASA_TRIBES_URL = process.env.ASA_TRIBES_URL || "";
 
 const AI_MODEL = "claude-sonnet-4-5";
 
@@ -67,41 +71,37 @@ const AI_PERSONALITY = [
 
 // ── Role IDs ──────────────────────────────────────────────────
 const ROLES = {
-  admin:   "703389459747700807",   // Admin ⭐
-  staff:   "1276494265593102357",  // Moderator
+  admin:   "703389459747700807",
+  staff:   "1276494265593102357",
   donator: null,
 };
 
 // ── Channel IDs ───────────────────────────────────────────────
 const CHANNEL_IDS = {
-  ai:               "1509816601334124614",  // #🤖︱ai
-  adminConsole:     "1509762780192837675",  // #🛠️・admin-console
-  staffChat:        "1509816635765293067",  // #🦑︱staff-chat
-  adminDiscussion:  "1510122840404394145",  // #admin-discussion
-  supportTicket:    "1509816628542570609",  // #🎫︱support-ticket
-  adminLogs:        "1509765406724980837",  // #admin-logs
-  ticketTranscript: "1509765427360694344",  // #ticket-transcripts
-  getRoles:         "1509816508291878972",  // #🎭︱get-roles
-  statusEmbed:      "1509883790783156437",  // #server-status-1
+  ai:               "1509816601334124614",
+  adminConsole:     "1509762780192837675",
+  staffChat:        "1509816635765293067",
+  adminDiscussion:  "1510122840404394145",
+  supportTicket:    "1509816628542570609",
+  adminLogs:        "1509765406724980837",
+  ticketTranscript: "1509765427360694344",
+  getRoles:         "1509816508291878972",
+  statusEmbed:      "1509883790783156437",
 };
 
-// AI channels that are always active (no !ai toggle needed)
 const AI_PUBLIC_CHANNEL_ID   = CHANNEL_IDS.ai;
 const AI_PUBLIC_CHANNEL_NAME = "🤖︱ai";
-
-// Admin channels where Helena responds to ARK-related messages automatically
-const ADMIN_CHANNEL_IDS = new Set([
-  CHANNEL_IDS.adminConsole,
-  CHANNEL_IDS.staffChat,
-  CHANNEL_IDS.adminDiscussion,
-]);
+const ADMIN_CHANNEL_IDS      = new Set([CHANNEL_IDS.adminConsole, CHANNEL_IDS.staffChat, CHANNEL_IDS.adminDiscussion]);
 
 // 🔴 PROTECTED — NEVER TOUCH
 const PROTECTED_CATEGORY_IDS = new Set([
-  "1509765384364888115", // ADMIN SUITE
-  "1509765438630789120", // MAP LOGS
-  "1509765536643285022", // TRIBE LOGS
+  "1509765384364888115", // Admin Suite
+  "1509765438630789120", // Cluster Map Logs
+  "1509765536643285022", // Tribe Data Logs
 ]);
+
+// Tribe Data Logs category — monitor ALL channels inside
+const TRIBE_LOG_CATEGORY_ID = "1509765536643285022";
 
 // ── Servers ───────────────────────────────────────────────────
 const SERVERS = [
@@ -192,18 +192,18 @@ const SLASH_COMMANDS = [
     name: "ban",
     description: "Ban a player from the cluster",
     options: [
-      { name: "player",   description: "Player Steam ID",                     type: ApplicationCommandOptionType.String, required: true },
-      { name: "server",   description: "Server(s) to ban on",                 type: ApplicationCommandOptionType.String, required: true, choices: serverChoicesAll },
-      { name: "reason",   description: "Reason for the ban",                  type: ApplicationCommandOptionType.String, required: true },
-      { name: "duration", description: "Duration (e.g. 7d, 30d, permanent)",  type: ApplicationCommandOptionType.String, required: false },
+      { name: "player",   description: "Player Steam ID",                    type: ApplicationCommandOptionType.String, required: true },
+      { name: "server",   description: "Server(s) to ban on",               type: ApplicationCommandOptionType.String, required: true, choices: serverChoicesAll },
+      { name: "reason",   description: "Reason for the ban",                type: ApplicationCommandOptionType.String, required: true },
+      { name: "duration", description: "Duration (e.g. 7d, 30d, permanent)", type: ApplicationCommandOptionType.String, required: false },
     ],
   },
   {
     name: "unban",
     description: "Unban a player",
     options: [
-      { name: "player", description: "Player Steam ID",        type: ApplicationCommandOptionType.String, required: true },
-      { name: "server", description: "Server(s) to unban on",  type: ApplicationCommandOptionType.String, required: true, choices: serverChoicesAll },
+      { name: "player", description: "Player Steam ID",       type: ApplicationCommandOptionType.String, required: true },
+      { name: "server", description: "Server(s) to unban on", type: ApplicationCommandOptionType.String, required: true, choices: serverChoicesAll },
     ],
   },
   {
@@ -235,10 +235,7 @@ const SLASH_COMMANDS = [
       { name: "fact", description: "The fact to remember", type: ApplicationCommandOptionType.String, required: true },
     ],
   },
-  {
-    name: "memory",
-    description: "View everything Helena remembers",
-  },
+  { name: "memory", description: "View everything Helena remembers" },
   {
     name: "forget",
     description: "Remove a memory by its number (see /memory)",
@@ -246,9 +243,31 @@ const SLASH_COMMANDS = [
       { name: "number", description: "The memory number to remove", type: ApplicationCommandOptionType.Integer, required: true },
     ],
   },
+  { name: "rates", description: "Show the current live cluster rates" },
   {
-    name: "rates",
-    description: "Show the current live cluster rates",
+    name: "activity",
+    description: "Show recent tribe-log activity Helena has captured",
+    options: [
+      { name: "type",  description: "Filter by event type",             type: ApplicationCommandOptionType.String,  required: false,
+        choices: [
+          { name: "PvP Kills",            value: "pvp_kill" },
+          { name: "Structures Destroyed", value: "structure_destroyed" },
+          { name: "Dinos Killed",         value: "dino_killed" },
+          { name: "Dinos Starved/Died",   value: "dino_starved" },
+          { name: "Transfers",            value: "transfer" },
+          { name: "Tames",                value: "dino_tamed" },
+          { name: "Member Changes",       value: "member_left" },
+        ] },
+      { name: "map",   description: "Filter by map name (e.g. Ragnarok)", type: ApplicationCommandOptionType.String,  required: false },
+      { name: "limit", description: "How many to show (default 15, max 40)", type: ApplicationCommandOptionType.Integer, required: false },
+    ],
+  },
+  {
+    name: "tribes",
+    description: "List active tribes across the cluster",
+    options: [
+      { name: "map", description: "Filter by map name", type: ApplicationCommandOptionType.String, required: false },
+    ],
   },
 ];
 
@@ -263,21 +282,41 @@ const openTickets     = new Map();
 const channelAI       = new Map();
 const sandboxSessions = new Map();
 let   longTermMemory  = [];
+let   recentEvents    = [];
+let   tribesSeen      = {};
 let   currentRates    = {};
 let   ratesUpdatedAt  = null;
+let   tribesCache     = [];
+let   tribesUpdatedAt = null;
 let   statusMessageId = null;
 const lastKnown       = {};
 let   lastStatusResults = [];
 
-const AI_TIMEOUT_MS     = 10 * 60 * 1000;
-const TRIBE_COOLDOWN_MS = 8000;
+const AI_TIMEOUT_MS      = 10 * 60 * 1000;
+const TRIBE_COOLDOWN_MS  = 10000;
+const RECENT_EVENTS_MAX  = 250;
+const TRIBE_ACTIVE_DAYS  = 7;
 const tribeAlertCooldown = new Map();
 
-const TRIBE_FLAGS = [
-  "was killed by", "killed by your", "destroyed by", "demolished",
-  "auto-decay", "was auto-decayed", "your tribe killed",
-  "froze", "claimed", "unclaimed", "uploaded", "downloaded",
-  "starved", "decay", "raided", "raid",
+// ── Event categories ──────────────────────────────────────────
+// ping:true = alert admins immediately; ping:false = silently record only
+// Order matters — first match wins, so put high-priority rules first.
+const TRIBE_EVENTS = [
+  { key: "pvp_kill",            label: "🔴 PvP Kill",             ping: true,  test: t => /was killed by .*\((human|.*player.*)\)/i.test(t) || /killed by your tribe/i.test(t) },
+  { key: "structure_destroyed", label: "💥 Structure Destroyed",  ping: true,  test: t => /was destroyed|demolished/i.test(t) },
+  { key: "turret_warning",      label: "⚠️ Turret Warning",       ping: true,  test: t => /turret|targeting|auto-?turret/i.test(t) },
+  { key: "dino_killed",         label: "🦖 Dino Killed",          ping: true,  test: t => /(your|tribe).{0,40}was killed/i.test(t) },
+  { key: "dino_starved",        label: "🍖 Dino Starved/Died",    ping: true,  test: t => /starved|died of/i.test(t) },
+  { key: "member_left",         label: "🚪 Member Left Tribe",    ping: true,  test: t => /was removed from the tribe|left the tribe/i.test(t) },
+  { key: "tribe_merge",         label: "🔗 Tribe Merged",         ping: true,  test: t => /merged|absorbed/i.test(t) },
+  { key: "rank_change",         label: "🎖️ Rank/Perms Changed",  ping: true,  test: t => /\brank\b|promoted|demoted|permission/i.test(t) },
+  { key: "member_joined",       label: "👋 Member Joined",        ping: false, test: t => /was added to the tribe/i.test(t) },
+  { key: "tribe_renamed",       label: "✏️ Tribe Renamed",        ping: false, test: t => /tribe name|renamed the tribe/i.test(t) },
+  { key: "transfer",            label: "📦 Dino/Item Transfer",   ping: false, test: t => /uploaded|downloaded/i.test(t) },
+  { key: "dino_claimed",        label: "🪢 Dino Claimed",         ping: false, test: t => /claimed/i.test(t) },
+  { key: "dino_tamed",          label: "🦕 Dino Tamed",           ping: false, test: t => /tamed a|was tamed|has tamed/i.test(t) },
+  { key: "egg_laid",            label: "🥚 Egg Laid",             ping: false, test: t => /\begg\b/i.test(t) },
+  { key: "structure_built",     label: "🏗️ Structure Built",      ping: false, test: t => /\bbuilt\b|placed a/i.test(t) },
 ];
 
 // ── Persistence ───────────────────────────────────────────────
@@ -287,6 +326,8 @@ function saveData() {
       warnRecords:    [...warnRecords.entries()],
       banRecords:     [...banRecords.entries()],
       longTermMemory,
+      recentEvents,
+      tribesSeen,
       ticketCounter,
     }, null, 2));
   } catch (err) { console.error("[Data] Save error:", err.message); }
@@ -299,8 +340,10 @@ function loadData() {
     if (Array.isArray(data.warnRecords))    for (const [k, v] of data.warnRecords) warnRecords.set(k, v);
     if (Array.isArray(data.banRecords))     for (const [k, v] of data.banRecords)  banRecords.set(k, v);
     if (Array.isArray(data.longTermMemory)) longTermMemory = data.longTermMemory;
+    if (Array.isArray(data.recentEvents))   recentEvents   = data.recentEvents;
+    if (data.tribesSeen && typeof data.tribesSeen === "object") tribesSeen = data.tribesSeen;
     if (typeof data.ticketCounter === "number") ticketCounter = data.ticketCounter;
-    console.log(`[Data] Loaded — ${warnRecords.size} warns, ${banRecords.size} bans, ${longTermMemory.length} memories.`);
+    console.log(`[Data] Loaded — ${warnRecords.size} warns, ${banRecords.size} bans, ${longTermMemory.length} memories, ${recentEvents.length} events.`);
   } catch (err) { console.error("[Data] Load error:", err.message); }
 }
 
@@ -311,6 +354,13 @@ function memoryForPrompt() {
     longTermMemory.map((m, i) => `${i + 1}. ${m.text}`).join("\n");
 }
 
+function recentEventsForPrompt() {
+  if (!recentEvents.length) return "";
+  const latest = recentEvents.slice(-25).reverse();
+  const lines  = latest.map(e => `- [${e.at.slice(5, 16).replace("T", " ")}] ${e.map}: ${e.label} — ${e.text}`);
+  return "\n\nRecent tribe-log activity you've observed (most recent first):\n" + lines.join("\n");
+}
+
 function serverStatusForPrompt() {
   if (!lastStatusResults.length) return "";
   const lines = lastStatusResults.map(({ server, data }) =>
@@ -319,6 +369,21 @@ function serverStatusForPrompt() {
     `- ${server.name}: online (${data.players}/${data.maxPlayers} players)`
   );
   return "\n\nLive server status right now:\n" + lines.join("\n");
+}
+
+function tribesForPrompt() {
+  if (tribesCache.length) {
+    const byMap = {};
+    for (const t of tribesCache) { const m = tribeMap(t) || "Unknown"; byMap[m] = (byMap[m] || 0) + 1; }
+    const breakdown = Object.entries(byMap).map(([m, n]) => `${m}: ${n}`).join(", ");
+    return `\n\nActive tribes on the cluster (live from ASA-Bot, updated ${tribesUpdatedAt?.toISOString() ?? "unknown"}): ${tribesCache.length} total. By map: ${breakdown}.`;
+  }
+  const active = activeTribes();
+  if (!active.length) return "";
+  const byMap = {};
+  for (const t of active) for (const m of (t.maps.length ? t.maps : ["Unknown"])) byMap[m] = (byMap[m] || 0) + 1;
+  const breakdown = Object.entries(byMap).map(([m, n]) => `${m}: ${n}`).join(", ");
+  return `\n\nActive tribes seen in tribe logs over the last ${TRIBE_ACTIVE_DAYS} days: ${active.length}. By map: ${breakdown}. (Derived from log activity.)`;
 }
 
 function ratesForPrompt() {
@@ -333,7 +398,9 @@ function buildSystemPrompt(extra = "") {
   return AI_PERSONALITY
     + "\n\n" + ratesForPrompt()
     + serverStatusForPrompt()
+    + tribesForPrompt()
     + memoryForPrompt()
+    + recentEventsForPrompt()
     + (extra ? "\n\n" + extra : "");
 }
 
@@ -352,6 +419,13 @@ const client = new Client({
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 // ── Guards ────────────────────────────────────────────────────
+function isStaff(member) {
+  if (!member) return false;
+  if (isAdmin(member)) return true;
+  if (ROLES.staff && member.roles?.cache?.has(ROLES.staff)) return true;
+  return member.permissions?.has(PermissionFlagsBits.ManageChannels) ?? false;
+}
+
 function isAdmin(member) {
   if (!member) return false;
   if (member.roles?.cache?.has(ROLES.admin)) return true;
@@ -419,7 +493,6 @@ async function fetchRates() {
   try {
     const res = await fetch(DYNAMIC_CONFIG_URL);
     if (!res.ok) { console.warn(`[Rates] HTTP ${res.status}`); return; }
-    // API returns plain text key=value pairs
     const text   = await res.text();
     const parsed = {};
     for (const line of text.split(/\r?\n/)) {
@@ -434,6 +507,35 @@ async function fetchRates() {
       console.log(`[Rates] Updated — ${Object.keys(parsed).length} values.`);
     }
   } catch (err) { console.error("[Rates] Fetch error:", err.message); }
+}
+
+// ── ASA-Bot Tribes ────────────────────────────────────────────
+async function fetchTribes() {
+  if (!ASA_TRIBES_URL) return;
+  try {
+    const headers = { "Accept": "application/json" };
+    if (ASA_API_KEY) headers["Authorization"] = `BOT ${ASA_API_KEY}`;
+    const res = await fetch(ASA_TRIBES_URL, { headers });
+    if (!res.ok) { console.warn(`[Tribes] HTTP ${res.status}`); return; }
+    const data = await res.json();
+    const list = Array.isArray(data) ? data : (data.tribes || data.data || data.results || []);
+    if (Array.isArray(list)) {
+      tribesCache     = list;
+      tribesUpdatedAt = new Date();
+      console.log(`[Tribes] Updated — ${list.length} tribes.`);
+    }
+  } catch (err) { console.error("[Tribes] Fetch error:", err.message); }
+}
+
+function tribeName(t)    { return t.name || t.tribeName || t.tribe || t.Name || "Unknown Tribe"; }
+function tribeMap(t)     { return t.map || t.server || t.serverName || t.Map || null; }
+function tribeMembers(t) { return t.members ?? t.memberCount ?? t.numMembers ?? (Array.isArray(t.players) ? t.players.length : null); }
+
+function activeTribes() {
+  const cutoff = Date.now() - TRIBE_ACTIVE_DAYS * 86400000;
+  return Object.entries(tribesSeen)
+    .filter(([, t]) => t.lastSeen && new Date(t.lastSeen).getTime() >= cutoff)
+    .map(([name, t]) => ({ name, ...t }));
 }
 
 // ── BattleMetrics ─────────────────────────────────────────────
@@ -539,21 +641,22 @@ async function postCommandsList(guild) {
       new EmbedBuilder()
         .setTitle("🤖  Helena — Admin Command Reference")
         .setColor(0x5865f2)
-        .setDescription("All commands below are **admin role only**.\nType `/` in any channel to open the command menu.\n─────────────────────────────────────────")
+        .setDescription("All commands are **admin role only**.\n─────────────────────────────────────────")
         .addFields(
-          { name: "📢  Announcements", value: "**`/announce`** — Post to a Discord channel.\n**`/broadcast`** — In-game RCON broadcast.\n**`/server-message`** — In-game chat message." },
-          { name: "⚠️  Player Management", value: "**`/warn`** — Issue a warning (logged + in-game).\n**`/kick`** — Kick via RCON.\n**`/ban`** — Ban via RCON.\n**`/unban`** — Unban via RCON.\n**`/player-history`** — View warnings & bans." },
-          { name: "🔧  Server Tools", value: "**`/server-save`** — Force-save an ARK world.\n**`/rates`** — Show current live cluster rates." },
-          { name: "🧠  Memory", value: "**`/remember`** — Save a fact (survives restarts).\n**`/memory`** — View all saved memories.\n**`/forget`** — Remove a memory by number." },
-          { name: "🧪  Brainstorming", value: "**`!sandbox`** — Opens a private DM to develop ideas.\n`!submit <title>` — post polished idea to #idea-review.\n`!cancel` — discard session." },
-          { name: "🤖  AI", value: "`!ai on/off` — toggle AI in current channel (admin only).\n`!ai help` — show capabilities.\n**#🤖︱ai** is always on for everyone." },
+          { name: "📢  Announcements", value: "**`/announce`** `/broadcast`** `/server-message`**" },
+          { name: "⚠️  Player Management", value: "**`/warn`** `/kick`** `/ban`** `/unban`** `/player-history`**" },
+          { name: "🔧  Server Tools", value: "**`/server-save`** `/rates`**" },
+          { name: "📋  Tribe-Log Monitoring", value: "Helena watches **all channels in the Tribe Data Logs category** automatically.\nPings <@&1242319080760467557> <@&1242319323145166868> on: PvP kills, structure destruction, dino deaths, starvation, turret alerts, member departures, tribe merges.\n**`/activity`** — view recent captured events (filter by type + map)\n**`/tribes`** — view active tribe roster" },
+          { name: "🧠  Memory", value: "**`/remember`** `/memory`** `/forget`**" },
+          { name: "🧪  Brainstorming", value: "**`!sandbox`** — private DM to develop ideas → `!submit <title>` → #idea-review" },
+          { name: "🤖  AI", value: "`!ai on/off` — toggle in any channel\n`!ai help` — capabilities\n**#🤖︱ai** always on" },
           { name: "🗺️  Servers", value: SERVERS.map(s => `\`${s.name}\``).join(", ") },
         )
-        .setFooter({ text: "Helena — Skii's Lodge v2.5.0  •  All actions logged automatically" })
+        .setFooter({ text: "Helena Walker — Skii's Lodge v2.6.0  •  All actions logged" })
         .setTimestamp(),
     ],
   });
-  console.log("[Commands] ✅ Posted to #helena-command-list.");
+  console.log("[Commands] ✅ Posted.");
 }
 
 // ── Ticket system ─────────────────────────────────────────────
@@ -574,13 +677,9 @@ async function postTicketPanel(guild) {
     for (const m of msgs.filter(m => m.author.id === client.user.id).values()) await m.delete().catch(() => {});
   } catch {}
   await ch.send({
-    embeds: [
-      new EmbedBuilder()
-        .setTitle("🎫  Support — Skii's Lodge")
-        .setColor(0x5865f2)
-        .setDescription("Need help? Click the button below to open a private support ticket.\n\n**Use tickets for:**\n• Rule violations or reports\n• Bugs or technical issues\n• Ban appeals\n• General questions for staff\n\n*A private channel will be created just for you and our team.*")
-        .setFooter({ text: "Skii's Lodge  •  Staff will respond as soon as possible" }),
-    ],
+    embeds: [new EmbedBuilder().setTitle("🎫  Support — Skii's Lodge").setColor(0x5865f2)
+      .setDescription("Need help? Click below to open a private support ticket.\n\n**Use tickets for:**\n• Rule violations or reports\n• Bugs or technical issues\n• Ban appeals\n• General questions for staff\n\n*A private channel will be created just for you and our team.*")
+      .setFooter({ text: "Skii's Lodge  •  Staff will respond as soon as possible" })],
     components: [new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId("create_ticket").setLabel("📩  Open a Ticket").setStyle(ButtonStyle.Primary)
     )],
@@ -596,11 +695,9 @@ async function createTicket(interaction) {
 
   ticketCounter++;
   const ticketNum = String(ticketCounter).padStart(4, "0");
-  const chanName  = `🎫︱ticket-${ticketNum}`;
-
-  let category = guild.channels.cache.get("1390284215870033971");
-  if (!category) category = guild.channels.cache.find(c => c.type === ChannelType.GuildCategory && c.name.toLowerCase().includes("open ticket"));
-  if (!category) category = await guild.channels.create({ name: "📂 Open Tickets", type: ChannelType.GuildCategory });
+  let category = guild.channels.cache.get("1390284215870033971")
+    || guild.channels.cache.find(c => c.type === ChannelType.GuildCategory && c.name.toLowerCase().includes("open ticket"))
+    || await guild.channels.create({ name: "📂 Open Tickets", type: ChannelType.GuildCategory });
 
   const perms = [
     { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
@@ -610,7 +707,7 @@ async function createTicket(interaction) {
   if (ROLES.admin) perms.push({ id: ROLES.admin, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] });
 
   const ticketCh = await guild.channels.create({
-    name: chanName, type: ChannelType.GuildText,
+    name: `🎫︱ticket-${ticketNum}`, type: ChannelType.GuildText,
     parent: category.id, permissionOverwrites: perms,
     topic: `Ticket #${ticketNum} — opened by ${member.user.tag}`,
   });
@@ -620,27 +717,30 @@ async function createTicket(interaction) {
   await ticketCh.send({
     content: `<@${member.id}>`,
     embeds: [new EmbedBuilder().setTitle(`🎫  Ticket #${ticketNum}`).setColor(0x5865f2)
-      .setDescription(`Welcome <@${member.id}>! Staff will be with you shortly.\n\nPlease describe your issue in detail.\nWhen resolved, click **Close Ticket** below.`).setTimestamp()],
+      .setDescription(`Welcome <@${member.id}>! Staff will be with you shortly.\n\nPlease describe your issue.\nWhen resolved, click **Close Ticket** below.`).setTimestamp()],
     components: [new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId("close_ticket").setLabel("🔒  Close Ticket").setStyle(ButtonStyle.Danger)
     )],
   });
   await interaction.reply({ content: `✅ Ticket opened: <#${ticketCh.id}>`, ephemeral: true });
   await logAction(guild, 0x5865f2, "🎫 Ticket Opened", [
-    { name: "User",    value: `<@${member.id}>`,   inline: true },
-    { name: "Ticket",  value: `#${ticketNum}`,     inline: true },
-    { name: "Channel", value: `<#${ticketCh.id}>`, inline: true },
+    { name: "User", value: `<@${member.id}>`, inline: true }, { name: "Ticket", value: `#${ticketNum}`, inline: true }, { name: "Channel", value: `<#${ticketCh.id}>`, inline: true },
   ]);
 }
 
 async function closeTicket(interaction) {
   const guild     = interaction.guild;
   const ch        = interaction.channel;
-  const closer    = interaction.member;
   const info      = openTickets.get(ch.id);
   const ticketNum = info ? info.ticketNum : ch.name.replace(/\D/g, "").padStart(4, "0");
 
-  let transcript = `Ticket #${ticketNum} — Closed by ${closer.user.tag}\nDate: ${new Date().toISOString()}\n${"─".repeat(60)}\n`;
+  let closer = interaction.member;
+  if (!closer) { try { closer = await guild.members.fetch(interaction.user.id); } catch {} }
+  const isOwner = info && info.userId === interaction.user.id;
+  if (!isOwner && !isStaff(closer)) return interaction.reply({ content: "❌ Only the ticket owner or staff can close this.", ephemeral: true });
+  const closerTag = closer?.user?.tag || interaction.user.tag;
+
+  let transcript = `Ticket #${ticketNum} — Closed by ${closerTag}\nDate: ${new Date().toISOString()}\n${"─".repeat(60)}\n`;
   try {
     const msgs   = await ch.messages.fetch({ limit: 100 });
     const sorted = [...msgs.values()].reverse();
@@ -652,14 +752,14 @@ async function closeTicket(interaction) {
     await transcriptsCh.send({
       embeds: [new EmbedBuilder().setTitle(`📁 Ticket #${ticketNum} — Transcript`).setColor(0xff6b00)
         .addFields(
-          { name: "Closed by", value: closer.user.tag,                        inline: true },
+          { name: "Closed by", value: closerTag,                          inline: true },
           { name: "User",      value: info ? `<@${info.userId}>` : "unknown", inline: true },
-          { name: "Date",      value: new Date().toISOString().slice(0, 10),  inline: true }
+          { name: "Date",      value: new Date().toISOString().slice(0, 10), inline: true }
         ).setTimestamp()],
       files: [new AttachmentBuilder(Buffer.from(transcript, "utf-8"), { name: `ticket-${ticketNum}.txt` })],
     });
   }
-  await interaction.reply({ content: `🔒 Closing ticket #${ticketNum}...` });
+  await interaction.reply({ content: `🔒 Ticket #${ticketNum} closed. Transcript saved.` });
   openTickets.delete(ch.id);
   saveData();
   try {
@@ -667,8 +767,7 @@ async function closeTicket(interaction) {
     await ch.setName(`🔒︱closed-${ticketNum}`);
   } catch {}
   await logAction(guild, 0xff6b00, "🔒 Ticket Closed", [
-    { name: "Closed by", value: closer.user.tag, inline: true },
-    { name: "Ticket",    value: `#${ticketNum}`,  inline: true },
+    { name: "Closed by", value: closerTag, inline: true }, { name: "Ticket", value: `#${ticketNum}`, inline: true },
   ]);
 }
 
@@ -683,7 +782,7 @@ async function postRolePanel(guild) {
   } catch {}
   await ch.send({
     embeds: [new EmbedBuilder().setTitle("🎭  Get Your Roles").setColor(0x7B2FBE)
-      .setDescription("Select your platform below to unlock the right channels and get pinged for relevant events!")
+      .setDescription("Select your platform below!")
       .setFooter({ text: "Skii's Lodge — role assignment" })],
     components: [new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
@@ -731,7 +830,7 @@ async function getAiResponse(channelId, userMessage, username) {
 async function getSandboxResponse(userId, userMessage) {
   const session = sandboxSessions.get(userId);
   if (!session) return "Your sandbox session has expired. Start again with `!sandbox`.";
-  if (!ANTHROPIC_API_KEY) return "⚠️ AI not configured. You can still type `!submit <title>` to send a raw idea.";
+  if (!ANTHROPIC_API_KEY) return "⚠️ AI not configured. Type `!submit <title>` to send a raw idea.";
   session.history.push({ role: "user", content: userMessage });
   if (session.history.length > 30) session.history.splice(0, 2);
   try {
@@ -740,7 +839,7 @@ async function getSandboxResponse(userId, userMessage) {
       headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
       body: JSON.stringify({
         model: AI_MODEL, max_tokens: 1500,
-        system: buildSystemPrompt("Right now you're brainstorming privately with an admin in their DMs. Help them develop and sharpen their idea: ask clarifying questions, suggest improvements, point out trade-offs, and shape it into a clear, actionable proposal. When they're ready, they'll type `!submit <title>` to send the polished idea to the admin review channel."),
+        system: buildSystemPrompt("Right now you're brainstorming privately with an admin in their DMs. Help them develop and sharpen their idea. When they're ready, they'll type `!submit <title>` to send it to the admin review channel."),
         messages: session.history,
       }),
     });
@@ -760,7 +859,7 @@ async function summarizeBrainstorm(history) {
       headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
       body: JSON.stringify({
         model: AI_MODEL, max_tokens: 600,
-        system: "Summarize the following brainstorm into a clean, structured proposal for an ARK cluster admin team to review. Use short sections: **Summary**, **Details**, and **Open Questions**. Be concise. Output only the proposal, no preamble.",
+        system: "Summarize the following brainstorm into a clean proposal for an ARK cluster admin team. Use: **Summary**, **Details**, **Open Questions**. Be concise. Output only the proposal.",
         messages: [{ role: "user", content: transcript }],
       }),
     });
@@ -773,36 +872,34 @@ async function submitIdea(user, session, title) {
   const guild    = client.guilds.cache.get(session.guildId);
   if (!guild) return user.send("❌ Could not find the server to submit to.");
   const reviewCh = findChannel(guild, "idea-review");
-  if (!reviewCh) return user.send("❌ The #idea-review channel doesn't exist yet.");
+  if (!reviewCh) return user.send("❌ #idea-review not found.");
 
   let body = await summarizeBrainstorm(session.history);
   if (!body) {
     const userMsgs = session.history.filter(m => m.role === "user").map(m => m.content);
-    body = userMsgs.length ? userMsgs.join("\n\n") : "*(No brainstorm content captured.)*";
+    body = userMsgs.length ? userMsgs.join("\n\n") : "*(No content captured.)*";
   }
   if (body.length > 3500) body = body.slice(0, 3500) + "…";
 
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId("idea_approve").setLabel("✅ Approve").setStyle(ButtonStyle.Success),
     new ButtonBuilder().setCustomId("idea_reject").setLabel("❌ Reject").setStyle(ButtonStyle.Danger),
-    new ButtonBuilder().setCustomId("idea_discuss").setLabel("💬 Open Discussion").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId("idea_discuss").setLabel("💬 Discuss").setStyle(ButtonStyle.Secondary),
   );
   const msg = await reviewCh.send({
     embeds: [new EmbedBuilder().setTitle(`💡  ${title}`).setColor(0xffc83d)
-      .setDescription(body).addFields({ name: "Status", value: "🕓 Pending review", inline: true })
+      .setDescription(body).addFields({ name: "Status", value: "🕓 Pending", inline: true })
       .setFooter({ text: `Submitted by ${user.tag}` }).setTimestamp()],
     components: [row],
   });
-  await user.send(`✅ Your idea **"${title}"** has been submitted to <#${reviewCh.id}> for review.`);
+  await user.send(`✅ Idea **"${title}"** submitted to <#${reviewCh.id}>.`);
   await logAction(guild, 0xffc83d, "💡 Idea Submitted", [
-    { name: "Submitted by", value: user.tag, inline: true },
-    { name: "Title",        value: title,    inline: true },
-    { name: "Review",       value: `[Jump to idea](${msg.url})` },
+    { name: "By", value: user.tag, inline: true }, { name: "Title", value: title, inline: true }, { name: "Review", value: `[Jump](${msg.url})` },
   ]);
 }
 
 async function handleIdeaDecision(interaction, decision) {
-  if (!isAdmin(interaction.member)) return interaction.reply({ content: "❌ Only admins can decide on ideas.", ephemeral: true });
+  if (!isAdmin(interaction.member)) return interaction.reply({ content: "❌ Admins only.", ephemeral: true });
   const original = interaction.message.embeds[0];
   if (!original) return;
   const isApprove = decision === "approve";
@@ -813,25 +910,21 @@ async function handleIdeaDecision(interaction, decision) {
     components: [new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId("idea_approve").setLabel("✅ Approve").setStyle(ButtonStyle.Success).setDisabled(true),
       new ButtonBuilder().setCustomId("idea_reject").setLabel("❌ Reject").setStyle(ButtonStyle.Danger).setDisabled(true),
-      new ButtonBuilder().setCustomId("idea_discuss").setLabel("💬 Open Discussion").setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId("idea_discuss").setLabel("💬 Discuss").setStyle(ButtonStyle.Secondary),
     )],
   });
-  await logAction(interaction.guild, isApprove ? 0x1ec864 : 0xff0000, isApprove ? "✅ Idea Approved" : "❌ Idea Rejected", [
-    { name: "Decided by", value: interaction.user.tag, inline: true },
-    { name: "Idea",       value: original.title || "Untitled", inline: true },
-  ]);
 }
 
 async function handleIdeaDiscuss(interaction) {
-  if (!isAdmin(interaction.member)) return interaction.reply({ content: "❌ Only admins can open discussion.", ephemeral: true });
+  if (!isAdmin(interaction.member)) return interaction.reply({ content: "❌ Admins only.", ephemeral: true });
   try {
     const title  = (interaction.message.embeds[0]?.title || "Idea").replace("💡  ", "");
     const thread = await interaction.message.startThread({ name: `💬 ${title}`.slice(0, 90), autoArchiveDuration: 1440 });
-    await interaction.reply({ content: `💬 Discussion thread opened: <#${thread.id}>`, ephemeral: true });
-  } catch (err) { await interaction.reply({ content: `❌ Could not open thread: ${err.message}`, ephemeral: true }); }
+    await interaction.reply({ content: `💬 Thread: <#${thread.id}>`, ephemeral: true });
+  } catch (err) { await interaction.reply({ content: `❌ ${err.message}`, ephemeral: true }); }
 }
 
-// ── Tribe log watcher ─────────────────────────────────────────
+// ── Tribe Log Watcher ─────────────────────────────────────────
 function extractLogText(message) {
   let text = message.content || "";
   for (const e of message.embeds || []) {
@@ -842,60 +935,114 @@ function extractLogText(message) {
   return text.trim();
 }
 
-async function evaluateTribeLog(text) {
-  if (!ANTHROPIC_API_KEY) {
-    const hit = ["was killed by", "destroyed by", "demolished", "raided"].find(k => text.toLowerCase().includes(k));
-    return hit ? { concerning: true, reason: `Keyword: "${hit}"` } : { concerning: false };
+function extractTribeName(message, text) {
+  for (const e of message.embeds || []) {
+    const a = e.author?.name?.trim();
+    if (a && a.length >= 2 && a.length <= 48) return a;
   }
-  try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify({
-        model: "claude-haiku-4-5", max_tokens: 150,
-        system: "You monitor ARK: Survival Ascended tribe logs for a PvE cluster. Flag entries that are CONCERNING: player-vs-player damage (shouldn't happen on PvE), structures destroyed/demolished by other players, griefing, possible exploits or duping, mass simultaneous losses, offensive or harassing names. Routine events (taming, leveling, deaths to wild dinos, normal decay, members joining) are NOT concerning. Reply with exactly 'OK' if routine, or 'CONCERN: <brief reason>' if an admin should look.",
-        messages: [{ role: "user", content: text.slice(0, 1500) }],
-      }),
-    });
-    const data  = await res.json();
-    const reply = (data.content?.[0]?.text || "").trim();
-    if (/^concern/i.test(reply)) return { concerning: true, reason: reply.replace(/^concern:?\s*/i, "") };
-    return { concerning: false };
-  } catch { return { concerning: false }; }
+  const patterns = [/tribe of ([^\n,!.(\-]{2,40})/i, /tribe[:\s]+([A-Za-z0-9 _'\[\]]{2,40})/i];
+  for (const re of patterns) {
+    const m = (text || "").match(re);
+    if (m && m[1]) return m[1].trim().replace(/\s+-.*$/, "").trim();
+  }
+  return null;
 }
 
-// Tribe Data Logs category ID — monitor ALL channels inside it
-const TRIBE_LOG_CATEGORY_ID = "1509765536643285022";
+function recordTribe(name, map) {
+  if (!name) return;
+  if (!tribesSeen[name]) tribesSeen[name] = { maps: [], lastSeen: null, count: 0 };
+  const t = tribesSeen[name];
+  if (map && !t.maps.includes(map)) t.maps.push(map);
+  t.lastSeen = new Date().toISOString();
+  t.count   += 1;
+}
+
+// "ragnarok-tribe-logs" → "Ragnarok"
+function mapFromChannel(name) {
+  const cleaned = (name || "")
+    .replace(/tribe-?logs?/gi, "").replace(/[^a-z\s-]/gi, "")
+    .replace(/-/g, " ").trim();
+  return cleaned ? cleaned.replace(/\b\w/g, c => c.toUpperCase()).trim() : "Unknown";
+}
+
+function extractActor(text) {
+  const m = text.match(/([A-Za-z0-9_\[\] ]{2,32})\s*-\s*Lvl\s*\d+/i);
+  return m ? m[1].trim() : null;
+}
+
+function categorize(text) {
+  for (const rule of TRIBE_EVENTS) {
+    try { if (rule.test(text)) return rule; } catch {}
+  }
+  return null;
+}
+
+function recordEvent(evt) {
+  recentEvents.push(evt);
+  if (recentEvents.length > RECENT_EVENTS_MAX) recentEvents.splice(0, recentEvents.length - RECENT_EVENTS_MAX);
+  saveData();
+}
+
+async function pingAdmins(message, rule, map, text) {
+  const guild   = message.guild;
+  const alertCh = findChannel(guild, TRIBE_ALERT_CHANNEL);
+  if (!alertCh) return;
+  const actor   = extractActor(text);
+  // Always ping BOTH admin roles as per standing instructions
+  const mention = `<@&1242319080760467557> <@&1242319323145166868>`;
+
+  await alertCh.send({
+    content: `🚨 ${mention} — ${rule.label}`,
+    embeds: [new EmbedBuilder()
+      .setTitle(rule.label)
+      .setColor(0xff0000)
+      .addFields(
+        { name: "Map",       value: map,                         inline: true },
+        { name: "Source",    value: `<#${message.channel.id}>`, inline: true },
+        ...(actor ? [{ name: "Who", value: actor, inline: true }] : []),
+        { name: "Log Entry", value: (text || "(no text)").slice(0, 1000) },
+      )
+      .setFooter({ text: "Helena tribe-log watcher" })
+      .setTimestamp()],
+  }).catch(() => {});
+}
 
 async function watchTribeLog(message) {
   if (!TRIBE_WATCH_ENABLED || !message.guild) return;
-  const name     = message.channel?.name?.toLowerCase() || "";
+  const chName   = message.channel?.name?.toLowerCase() || "";
   const parentId = message.channel?.parentId || "";
-  // Match by category ID (catches all channels inside Tribe Data Logs)
-  // OR by channel name containing "tribe-log" (fallback)
-  const isTribeLogChannel = parentId === TRIBE_LOG_CATEGORY_ID || name.includes("tribe-log");
+
+  // Monitor by category ID (all channels in Tribe Data Logs) OR name fallback
+  const isTribeLogChannel = parentId === TRIBE_LOG_CATEGORY_ID || chName.includes("tribe-log");
   if (!isTribeLogChannel) return;
-  console.log(`[TribeWatch] Monitoring message in #${message.channel.name} (category: ${parentId})`);
-  const text  = extractLogText(message);
+
+  const text = extractLogText(message);
   if (!text) return;
-  const lower = text.toLowerCase();
-  if (!TRIBE_FLAGS.some(k => lower.includes(k))) return;
-  const last = tribeAlertCooldown.get(message.channel.id) || 0;
-  if (Date.now() - last < TRIBE_COOLDOWN_MS) return;
-  const verdict = await evaluateTribeLog(text);
-  if (!verdict.concerning) return;
-  tribeAlertCooldown.set(message.channel.id, Date.now());
-  const alertCh = findChannel(message.guild, TRIBE_ALERT_CHANNEL);
-  if (!alertCh) return;
-  await alertCh.send({
-    content: `🚨 <@&1242319080760467557> <@&1242319323145166868> — concerning tribe log activity`,
-    embeds: [new EmbedBuilder().setTitle("🚨 Tribe Log Alert").setColor(0xff0000)
-      .addFields(
-        { name: "Source",    value: `<#${message.channel.id}>`, inline: true },
-        { name: "Reason",    value: verdict.reason || "Flagged", inline: false },
-        { name: "Log Entry", value: text.slice(0, 1000) },
-      ).setFooter({ text: "Helena tribe-log watcher" }).setTimestamp()],
-  }).catch(() => {});
+
+  const rule = categorize(text);
+  if (!rule) return;
+
+  const map = mapFromChannel(chName);
+
+  // Always record silently
+  recordEvent({
+    type: rule.key, label: rule.label, map,
+    text: text.slice(0, 300), channelId: message.channel.id,
+    at: new Date().toISOString(),
+  });
+
+  // Derive tribe roster from logs
+  recordTribe(extractTribeName(message, text), map);
+
+  // Ping admins only for high-impact events with per-channel+type cooldown
+  if (rule.ping) {
+    const cdKey = `${message.channel.id}:${rule.key}`;
+    const last  = tribeAlertCooldown.get(cdKey) || 0;
+    if (Date.now() - last >= TRIBE_COOLDOWN_MS) {
+      tribeAlertCooldown.set(cdKey, Date.now());
+      await pingAdmins(message, rule, map, text);
+    }
+  }
 }
 
 // ── Slash command handlers ────────────────────────────────────
@@ -904,12 +1051,10 @@ async function handleAnnounce(interaction) {
   const message = interaction.options.getString("message");
   const ping    = interaction.options.getBoolean("ping") ?? false;
   await channel.send(ping ? `@everyone\n${message}` : message);
-  await interaction.editReply({ content: `✅ Announcement posted in <#${channel.id}>`, ephemeral: true });
+  await interaction.editReply({ content: `✅ Posted in <#${channel.id}>`, ephemeral: true });
   await logAnnouncement(interaction.guild, [
-    { name: "Admin",   value: interaction.user.tag, inline: true },
-    { name: "Channel", value: `<#${channel.id}>`,   inline: true },
-    { name: "Pinged",  value: ping ? "Yes" : "No",  inline: true },
-    { name: "Message", value: message },
+    { name: "Admin", value: interaction.user.tag, inline: true }, { name: "Channel", value: `<#${channel.id}>`, inline: true },
+    { name: "Pinged", value: ping ? "Yes" : "No", inline: true }, { name: "Message", value: message },
   ]);
 }
 
@@ -919,9 +1064,7 @@ async function handleBroadcast(interaction) {
   const results = await sendRconMany(server, `Broadcast ${message}`);
   await interaction.editReply({ content: `📡 Broadcast:\n${rconSummary(results)}`, ephemeral: true });
   await logAction(interaction.guild, 0x5865f2, "📡 Broadcast", [
-    { name: "Admin",   value: interaction.user.tag, inline: true },
-    { name: "Server",  value: server,               inline: true },
-    { name: "Message", value: message },
+    { name: "Admin", value: interaction.user.tag, inline: true }, { name: "Server", value: server, inline: true }, { name: "Message", value: message },
   ]);
 }
 
@@ -935,10 +1078,8 @@ async function handleWarn(interaction) {
   const r = await sendRcon(server, `Broadcast WARNING issued to ${player}: ${reason}`);
   await interaction.editReply({ content: `⚠️ Warning issued to **${player}**. RCON: ${r.success ? "✅" : `❌ ${r.error}`}`, ephemeral: true });
   await logPlayerAction(interaction.guild, 0xffa500, "⚠️ Player Warning", [
-    { name: "Admin",  value: interaction.user.tag, inline: true },
-    { name: "Player", value: player,               inline: true },
-    { name: "Server", value: server,               inline: true },
-    { name: "Reason", value: reason },
+    { name: "Admin", value: interaction.user.tag, inline: true }, { name: "Player", value: player, inline: true },
+    { name: "Server", value: server, inline: true }, { name: "Reason", value: reason },
     { name: "Total Warnings", value: String(warnRecords.get(player).length), inline: true },
   ]);
 }
@@ -950,10 +1091,8 @@ async function handleKick(interaction) {
   const results = await sendRconMany(server, `KickPlayer ${player}`);
   await interaction.editReply({ content: `👢 Kick:\n${rconSummary(results)}`, ephemeral: true });
   await logPlayerAction(interaction.guild, 0xff6b00, "👢 Player Kicked", [
-    { name: "Admin",  value: interaction.user.tag, inline: true },
-    { name: "Player", value: player,               inline: true },
-    { name: "Server", value: server,               inline: true },
-    { name: "Reason", value: reason },
+    { name: "Admin", value: interaction.user.tag, inline: true }, { name: "Player", value: player, inline: true },
+    { name: "Server", value: server, inline: true }, { name: "Reason", value: reason },
   ]);
 }
 
@@ -967,25 +1106,19 @@ async function handleBan(interaction) {
   const results = await sendRconMany(server, `BanPlayer ${player}`);
   await interaction.editReply({ content: `🔨 Ban:\n${rconSummary(results)}`, ephemeral: true });
   await logPlayerAction(interaction.guild, 0xff0000, "🔨 Player Banned", [
-    { name: "Admin",    value: interaction.user.tag, inline: true },
-    { name: "Player",   value: player,               inline: true },
-    { name: "Server",   value: server,               inline: true },
-    { name: "Duration", value: duration,             inline: true },
-    { name: "Reason",   value: reason },
+    { name: "Admin", value: interaction.user.tag, inline: true }, { name: "Player", value: player, inline: true },
+    { name: "Server", value: server, inline: true }, { name: "Duration", value: duration, inline: true }, { name: "Reason", value: reason },
   ]);
 }
 
 async function handleUnban(interaction) {
   const player = interaction.options.getString("player");
   const server = interaction.options.getString("server");
-  banRecords.delete(player);
-  saveData();
+  banRecords.delete(player); saveData();
   const results = await sendRconMany(server, `UnbanPlayer ${player}`);
   await interaction.editReply({ content: `✅ Unban:\n${rconSummary(results)}`, ephemeral: true });
   await logPlayerAction(interaction.guild, 0x00cc44, "✅ Player Unbanned", [
-    { name: "Admin",  value: interaction.user.tag, inline: true },
-    { name: "Player", value: player,               inline: true },
-    { name: "Server", value: server,               inline: true },
+    { name: "Admin", value: interaction.user.tag, inline: true }, { name: "Player", value: player, inline: true }, { name: "Server", value: server, inline: true },
   ]);
 }
 
@@ -1008,8 +1141,7 @@ async function handleServerSave(interaction) {
   const results = await sendRconMany(server, "SaveWorld");
   await interaction.editReply({ content: `💾 Save:\n${rconSummary(results)}`, ephemeral: true });
   await logAction(interaction.guild, 0x1ec864, "💾 World Saved", [
-    { name: "Admin", value: interaction.user.tag, inline: true },
-    { name: "Server", value: server,              inline: true },
+    { name: "Admin", value: interaction.user.tag, inline: true }, { name: "Server", value: server, inline: true },
   ]);
 }
 
@@ -1026,13 +1158,12 @@ async function handleRemember(interaction) {
   saveData();
   await interaction.editReply({ content: `🧠 Got it — I'll remember: *"${fact}"*`, ephemeral: true });
   await logAction(interaction.guild, 0x9b59b6, "🧠 Memory Added", [
-    { name: "Added by", value: interaction.user.tag, inline: true },
-    { name: "Fact",     value: fact },
+    { name: "Added by", value: interaction.user.tag, inline: true }, { name: "Fact", value: fact },
   ]);
 }
 
 async function handleMemory(interaction) {
-  if (!longTermMemory.length) return interaction.editReply({ content: "🧠 No memories yet. Add one with `/remember`.", ephemeral: true });
+  if (!longTermMemory.length) return interaction.editReply({ content: "🧠 No memories yet. Use `/remember`.", ephemeral: true });
   const lines = longTermMemory.map((m, i) => `**${i + 1}.** ${m.text}  *(by ${m.addedBy}, ${m.date.slice(0, 10)})*`);
   await interaction.editReply({
     embeds: [new EmbedBuilder().setTitle("🧠  Helena's Long-Term Memory").setColor(0x9b59b6)
@@ -1052,13 +1183,75 @@ async function handleForget(interaction) {
 
 async function handleRates(interaction) {
   await fetchRates();
-  if (!Object.keys(currentRates).length) return interaction.editReply({ content: "⚠️ Rates unavailable right now.", ephemeral: true });
+  if (!Object.keys(currentRates).length) return interaction.editReply({ content: "⚠️ Rates unavailable.", ephemeral: true });
   const lines = Object.entries(currentRates).filter(([k]) => RATE_LABELS[k]).map(([k, v]) => `**${labelRate(k)}:** \`${v}x\``);
   await interaction.editReply({
     embeds: [new EmbedBuilder().setTitle("⚙️  Skii's Lodge — Live Cluster Rates").setColor(0x1ec864)
-      .setDescription(lines.join("\n"))
-      .setFooter({ text: "Pulled live from the cluster config" })
+      .setDescription(lines.join("\n")).setFooter({ text: "Pulled live from the cluster config" })
       .setTimestamp(ratesUpdatedAt || new Date())],
+    ephemeral: true,
+  });
+}
+
+async function handleActivity(interaction) {
+  const type  = interaction.options.getString("type");
+  const map   = interaction.options.getString("map");
+  const limit = Math.min(interaction.options.getInteger("limit") || 15, 40);
+
+  let events = [...recentEvents].reverse();
+  if (type) events = events.filter(e => e.type === type);
+  if (map)  events = events.filter(e => e.map.toLowerCase().includes(map.toLowerCase()));
+  events = events.slice(0, limit);
+
+  if (!events.length) return interaction.editReply({ content: "📭 No matching tribe-log activity captured yet.", ephemeral: true });
+
+  const lines = events.map(e =>
+    `**${e.label}** • \`${e.map}\` • <t:${Math.floor(new Date(e.at).getTime() / 1000)}:R>\n> ${e.text.slice(0, 180)}`
+  );
+  await interaction.editReply({
+    embeds: [new EmbedBuilder().setTitle("📋  Recent Tribe-Log Activity").setColor(0x5865f2)
+      .setDescription(lines.join("\n\n").slice(0, 4000))
+      .setFooter({ text: `${events.length} event(s)${type ? " • " + type : ""}${map ? " • " + map : ""}` })
+      .setTimestamp()],
+    ephemeral: true,
+  });
+}
+
+async function handleTribes(interaction) {
+  const mapFilter = interaction.options.getString("map");
+
+  if (ASA_TRIBES_URL && tribesCache.length) {
+    let tribes = tribesCache;
+    if (mapFilter) tribes = tribes.filter(t => (tribeMap(t) || "").toLowerCase().includes(mapFilter.toLowerCase()));
+    const byMap = {};
+    for (const t of tribes) { const m = tribeMap(t) || "Unknown"; (byMap[m] = byMap[m] || []).push(t); }
+    const sections = Object.entries(byMap).map(([m, list]) =>
+      `**${m}** — ${list.length} tribe(s)\n${list.map(t => { const mem = tribeMembers(t); return `• ${tribeName(t)}${mem != null ? ` (${mem})` : ""}`; }).join("\n")}`
+    );
+    return interaction.editReply({
+      embeds: [new EmbedBuilder().setTitle("🏰  Active Tribes — Skii's Lodge").setColor(0x1ec864)
+        .setDescription(`**${tribes.length}** tribe(s).\n\n${sections.join("\n\n").slice(0, 3800)}`)
+        .setFooter({ text: "Live from ASA-Bot" }).setTimestamp(tribesUpdatedAt || new Date())],
+      ephemeral: true,
+    });
+  }
+
+  let active = activeTribes();
+  if (mapFilter) active = active.filter(t => t.maps.some(m => m.toLowerCase().includes(mapFilter.toLowerCase())));
+  if (!active.length) return interaction.editReply({ content: "📭 No tribe activity captured yet. Helena builds this roster from tribe-log entries as they come in.", ephemeral: true });
+
+  const byMap = {};
+  for (const t of active) {
+    const maps = t.maps.length ? t.maps : ["Unknown"];
+    for (const m of maps) (byMap[m] = byMap[m] || []).push(t);
+  }
+  const sections = Object.entries(byMap).map(([m, list]) =>
+    `**${m}** — ${list.length} tribe(s)\n${list.sort((a, b) => new Date(b.lastSeen) - new Date(a.lastSeen)).map(t => `• ${t.name}  <t:${Math.floor(new Date(t.lastSeen).getTime() / 1000)}:R>`).join("\n")}`
+  );
+  await interaction.editReply({
+    embeds: [new EmbedBuilder().setTitle("🏰  Active Tribes — Skii's Lodge").setColor(0x1ec864)
+      .setDescription(`**${active.length}** tribe(s) active in the last ${TRIBE_ACTIVE_DAYS} days.\n\n${sections.join("\n\n").slice(0, 3800)}`)
+      .setFooter({ text: "Derived from tribe-log activity" }).setTimestamp()],
     ephemeral: true,
   });
 }
@@ -1067,17 +1260,17 @@ async function handleRates(interaction) {
 async function postOnlineMessage(guild) {
   for (const [id, name] of [[CHANNEL_IDS.adminConsole, "#admin-console"], [CHANNEL_IDS.staffChat, "#staff-chat"]]) {
     const ch = guild.channels.cache.get(id);
-    if (!ch) { console.error(`❌ Could not find ${name}`); continue; }
+    if (!ch) continue;
     await ch.send({
       embeds: [new EmbedBuilder().setTitle("🟢  HELENA IS ONLINE").setColor(0x2ECC71)
         .setDescription(
-          `Systems are up and I am ready to go.\n\n` +
-          `🤖 **AI Brain:** ${ANTHROPIC_API_KEY ? "✅ Active" : "❌ Disabled"}\n` +
-          `🕐 **Started:** <t:${Math.floor(Date.now() / 1000)}:F>\n\n` +
-          `*Talk to me naturally in admin channels — ARK questions, polls, player issues.*`
+          `Systems are up and I am ready.\n\n` +
+          `🤖 **AI:** ${ANTHROPIC_API_KEY ? "✅ Active" : "❌ Disabled"}\n` +
+          `📋 **Tribe Watcher:** ✅ Monitoring Tribe Data Logs category\n` +
+          `🕐 **Started:** <t:${Math.floor(Date.now() / 1000)}:F>`
         )
-        .setFooter({ text: "Helena Walker — Skii's Lodge v2.5.0" })],
-    }).catch(err => console.error(`❌ Online msg to ${name}: ${err.message}`));
+        .setFooter({ text: "Helena Walker — Skii's Lodge v2.6.0" })],
+    }).catch(() => {});
     console.log(`✅ Online message → ${name}`);
   }
 }
@@ -1096,11 +1289,12 @@ client.once("ready", async () => {
   await postRolePanel(guild);
   await postCommandsList(guild);
   await fetchRates();
+  await fetchTribes();
   await pollServers();
   await postOnlineMessage(guild);
 
-  setInterval(async () => { await fetchRates(); await pollServers(); }, UPDATE_INTERVAL_MINUTES * 60 * 1000);
-  console.log("✅ Helena v2.5.0 setup complete!");
+  setInterval(async () => { await fetchRates(); await fetchTribes(); await pollServers(); }, UPDATE_INTERVAL_MINUTES * 60 * 1000);
+  console.log("✅ Helena v2.6.0 setup complete!");
 });
 
 // ── INTERACTIONS ──────────────────────────────────────────────
@@ -1121,16 +1315,15 @@ client.on("interactionCreate", async (interaction) => {
         for (const p of PLATFORMS) { if (member.roles.cache.has(p.roleId)) await member.roles.remove(p.roleId).catch(() => {}); }
         for (const roleId of interaction.values) await member.roles.add(roleId).catch(() => {});
         const names = PLATFORMS.filter(p => interaction.values.includes(p.roleId)).map(p => `${p.emoji} ${p.name}`).join(", ");
-        await interaction.reply({ content: `✅ Platform roles updated: **${names}**`, ephemeral: true });
-      } catch (err) { await interaction.reply({ content: `❌ Role assignment failed: ${err.message}`, ephemeral: true }); }
+        await interaction.reply({ content: `✅ Roles updated: **${names}**`, ephemeral: true });
+      } catch (err) { await interaction.reply({ content: `❌ Role error: ${err.message}`, ephemeral: true }); }
       return;
     }
     return;
   }
 
   if (!interaction.isChatInputCommand()) return;
-
-  if (!isAdmin(interaction.member)) return interaction.reply({ content: "❌ Helena commands are restricted to the **Admin** role only.", ephemeral: true });
+  if (!isAdmin(interaction.member)) return interaction.reply({ content: "❌ Admin role only.", ephemeral: true });
   await interaction.deferReply({ ephemeral: true });
 
   try {
@@ -1148,6 +1341,8 @@ client.on("interactionCreate", async (interaction) => {
       case "memory":         await handleMemory(interaction);        break;
       case "forget":         await handleForget(interaction);        break;
       case "rates":          await handleRates(interaction);         break;
+      case "activity":       await handleActivity(interaction);      break;
+      case "tribes":         await handleTribes(interaction);        break;
       default: await interaction.editReply({ content: "Unknown command." });
     }
   } catch (err) {
@@ -1158,7 +1353,7 @@ client.on("interactionCreate", async (interaction) => {
 
 // ── MESSAGES ──────────────────────────────────────────────────
 client.on("messageCreate", async (message) => {
-  // Tribe watcher — runs on ALL messages (including bot posts) except Helena herself
+  // Tribe watcher runs on ALL messages (including bots) except Helena herself
   if (message.author.id !== client.user?.id) {
     watchTribeLog(message).catch(() => {});
   }
@@ -1179,7 +1374,7 @@ client.on("messageCreate", async (message) => {
     }
     if (dm.toLowerCase() === "!cancel") {
       sandboxSessions.delete(message.author.id);
-      return message.reply("🚪 Sandbox session ended — nothing was submitted.");
+      return message.reply("🚪 Sandbox session ended.");
     }
     await message.channel.sendTyping();
     const reply = await getSandboxResponse(message.author.id, message.content);
@@ -1204,24 +1399,21 @@ client.on("messageCreate", async (message) => {
 
   // ── !sandbox ─────────────────────────────────────────────
   if (lower === "!sandbox") {
-    console.log(`[Sandbox] triggered by ${message.author.tag} in #${message.channel.name}`);
+    console.log(`[Sandbox] triggered by ${message.author.tag}`);
     let member = message.member;
-    if (!member) {
-      try { member = await guild.members.fetch(message.author.id); } catch {}
-    }
+    if (!member) { try { member = await guild.members.fetch(message.author.id); } catch {} }
     if (!isAdmin(member)) return message.reply("❌ Only admins can use the sandbox.");
     sandboxSessions.set(message.author.id, { history: [], guildId: guild.id });
     try {
       const dm = await message.author.createDM();
       await dm.send({
         embeds: [new EmbedBuilder().setTitle("🧪  Sandbox — Private Brainstorm").setColor(0xffc83d)
-          .setDescription("Let's develop your idea privately. Just start typing and I'll help shape it.\n\n**`!submit <title>`** — send polished idea to #idea-review\n**`!cancel`** — discard session")],
+          .setDescription("Let's develop your idea privately. Just start typing.\n\n**`!submit <title>`** — send to #idea-review\n**`!cancel`** — discard")],
       });
-      await message.reply("📬 Check your DMs — let's brainstorm!");
+      await message.reply("📬 Check your DMs!");
     } catch (err) {
       sandboxSessions.delete(message.author.id);
-      console.error(`[Sandbox] DM failed for ${message.author.tag}:`, err.message);
-      await message.reply("❌ I couldn't DM you. Go to Server Settings → Privacy & Safety → Allow direct messages, then try again.");
+      await message.reply("❌ Couldn't DM you. Enable DMs in Server Settings → Privacy & Safety.");
     }
     return;
   }
@@ -1229,16 +1421,14 @@ client.on("messageCreate", async (message) => {
   // ── !ai on/off ───────────────────────────────────────────
   if (lower === "!ai on" || lower === "!ai off") {
     let member = message.member;
-    if (!member) {
-      try { member = await guild.members.fetch(message.author.id); } catch {}
-    }
+    if (!member) { try { member = await guild.members.fetch(message.author.id); } catch {} }
     if (!isAdmin(member)) return message.reply("❌ Only admins can toggle Helena AI.");
     if (lower === "!ai on") {
       if (!channelAI.has(chId)) channelAI.set(chId, { enabled: false, timer: null, history: [] });
       const state = channelAI.get(chId);
       state.enabled = true; state.history = [];
       resetAiTimer(chId, guild);
-      await message.reply("🟢 **Helena AI is now active in this channel.**\n*Auto-shuts off after 10 minutes of inactivity.*");
+      await message.reply("🟢 **Helena AI is now active.**\n*Auto-shuts off after 10 minutes of inactivity.*");
     } else {
       const state = channelAI.get(chId);
       if (state) { if (state.timer) clearTimeout(state.timer); state.enabled = false; state.timer = null; state.history = []; }
@@ -1250,31 +1440,27 @@ client.on("messageCreate", async (message) => {
   // ── !ai help ─────────────────────────────────────────────
   if (lower === "!ai help") {
     await message.reply([
-      "**🤖 Helena v2.5.0 — Capabilities**",
-      "",
-      "**Server Info** — rates (live), rules, 13 maps, wipe schedule, admins",
-      "**Game Knowledge** — taming, breeding, mutations, all maps, bosses, kibble, TEK",
-      "**Live Status** — ask which servers are online right now",
-      "**Support Triage** — diagnose bugs, escalate to admins",
-      "",
-      "**Admin Slash Commands** — `/warn`, `/kick`, `/ban`, `/announce`, `/rates`, `/remember` and more",
-      "**`!sandbox`** — private DM to brainstorm ideas → submit to #idea-review",
-      "**Tribe Watcher** — auto-flags concerning tribe log entries",
-      "",
-      "**#🤖︱ai** is always on. `!ai on/off` toggles AI in any channel (admin only).",
+      "**🤖 Helena v2.6.0 — Capabilities**\n",
+      "**Server Info** — live rates, rules, 13 maps, wipe schedule, admins",
+      "**Game Knowledge** — taming, breeding, mutations, all maps, bosses, kibble",
+      "**Live Status** — which servers are online right now",
+      "**Tribe Watcher** — monitors ALL channels in Tribe Data Logs, pings admins on PvP/destruction/etc.",
+      "**`/activity`** — view recent tribe-log events | **`/tribes`** — active tribe roster",
+      "**Admin Commands** — `/warn`, `/kick`, `/ban`, `/announce`, `/rates`, `/remember` and more",
+      "**`!sandbox`** — private DM brainstorm → submit to #idea-review\n",
+      "**#🤖︱ai** is always on. `!ai on/off` toggles any other channel (admin only).",
     ].join("\n"));
     return;
   }
 
-  // Ignore other ! commands
   if (content.startsWith("!")) return;
 
-  // ── AI response logic ─────────────────────────────────────
-  const isPublicAi  = chId === AI_PUBLIC_CHANNEL_ID || message.channel.name === AI_PUBLIC_CHANNEL_NAME;
-  const state       = channelAI.get(chId);
-  const isToggled   = state?.enabled === true;
-  const isAdminCh   = ADMIN_CHANNEL_IDS.has(chId);
-  const isArkQuery  = /\?|tame|breed|mut|imprint|dino|tribe|base|raid|server|map|boss|ark|wipe|rate|kibble|egg|baby|hatch|poll|announce|ban|kick|warn|online|player|spawn|saddle|boss|alpha/i.test(content);
+  // ── AI response ───────────────────────────────────────────
+  const isPublicAi = chId === AI_PUBLIC_CHANNEL_ID || message.channel.name === AI_PUBLIC_CHANNEL_NAME;
+  const state      = channelAI.get(chId);
+  const isToggled  = state?.enabled === true;
+  const isAdminCh  = ADMIN_CHANNEL_IDS.has(chId);
+  const isArkQuery = /\?|tame|breed|mut|imprint|dino|tribe|base|raid|server|map|boss|ark|wipe|rate|kibble|egg|baby|hatch|announce|ban|kick|warn|online|player|spawn|saddle|alpha/i.test(content);
 
   if (!isPublicAi && !isToggled && !(isAdminCh && isArkQuery)) return;
   if (isToggled && !isPublicAi) resetAiTimer(chId, guild);
