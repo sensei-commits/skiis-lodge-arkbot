@@ -22,7 +22,7 @@ catch { console.warn("[RCON] rcon-client not installed — actions logged only."
 
 const fs   = require("fs");
 const http = require("http");
-const DATA_FILE = "./helena-data.json";
+const { Pool } = require("pg");
 
 // ── Keepalive — must be first so Railway health checks pass ──
 const KEEPALIVE_PORT = process.env.PORT || 8080;
@@ -333,33 +333,221 @@ const TRIBE_EVENTS = [
   { key: "structure_built",     label: "🏗️ Structure Built",      ping: false, test: t => /\bbuilt\b|placed a/i.test(t) },
 ];
 
-// ── Persistence ───────────────────────────────────────────────
-function saveData() {
+// ── PostgreSQL persistence ───────────────────────────────────
+// All durable state lives in the database. In-memory maps/arrays are
+// loaded on startup and kept in sync as the source of truth for speed.
+
+let db = null; // Pool instance — null until initDB() succeeds
+
+async function initDB() {
+  if (!process.env.DATABASE_URL) {
+    console.warn("[DB] DATABASE_URL not set — running without persistence (data lost on restart)");
+    return;
+  }
   try {
-    fs.writeFileSync(DATA_FILE, JSON.stringify({
-      warnRecords:    [...warnRecords.entries()],
-      banRecords:     [...banRecords.entries()],
-      longTermMemory,
-      recentEvents,
-      tribesSeen,
-      ticketCounter,
-    }, null, 2));
-  } catch (err) { console.error("[Data] Save error:", err.message); }
+    db = new Pool({
+      connectionString: process.env.DATABASE_URL,
+      ssl: { rejectUnauthorized: false },
+      max: 5,
+      idleTimeoutMillis: 30000,
+    });
+    await db.query("SELECT 1"); // test connection
+    console.log("[DB] ✅ Connected to PostgreSQL");
+    await createTables();
+    await loadFromDB();
+  } catch (err) {
+    console.error("[DB] ❌ Connection failed:", err.message);
+    db = null;
+  }
 }
 
-function loadData() {
-  try {
-    if (!fs.existsSync(DATA_FILE)) { console.log("[Data] No save file — starting fresh."); return; }
-    const data = JSON.parse(fs.readFileSync(DATA_FILE, "utf-8"));
-    if (Array.isArray(data.warnRecords))    for (const [k, v] of data.warnRecords) warnRecords.set(k, v);
-    if (Array.isArray(data.banRecords))     for (const [k, v] of data.banRecords)  banRecords.set(k, v);
-    if (Array.isArray(data.longTermMemory)) longTermMemory = data.longTermMemory;
-    if (Array.isArray(data.recentEvents))   recentEvents   = data.recentEvents;
-    if (data.tribesSeen && typeof data.tribesSeen === "object") tribesSeen = data.tribesSeen;
-    if (typeof data.ticketCounter === "number") ticketCounter = data.ticketCounter;
-    console.log(`[Data] Loaded — ${warnRecords.size} warns, ${banRecords.size} bans, ${longTermMemory.length} memories, ${recentEvents.length} events.`);
-  } catch (err) { console.error("[Data] Load error:", err.message); }
+async function createTables() {
+  const sql = `
+    CREATE TABLE IF NOT EXISTS memory (
+      id         SERIAL PRIMARY KEY,
+      text       TEXT        NOT NULL,
+      added_by   TEXT        NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS tribe_events (
+      id         SERIAL PRIMARY KEY,
+      tribe      TEXT        NOT NULL,
+      map        TEXT        NOT NULL,
+      event_type TEXT        NOT NULL,
+      event_text TEXT        NOT NULL,
+      day_time   TEXT        NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS tribes (
+      name        TEXT PRIMARY KEY,
+      maps        TEXT        NOT NULL DEFAULT '',
+      last_seen   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      event_count INTEGER     NOT NULL DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS mod_records (
+      id         SERIAL PRIMARY KEY,
+      player_id  TEXT        NOT NULL,
+      type       TEXT        NOT NULL,
+      reason     TEXT        NOT NULL,
+      admin      TEXT        NOT NULL,
+      server     TEXT        NOT NULL,
+      duration   TEXT        NOT NULL DEFAULT 'N/A',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS bot_state (
+      key   TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+  `;
+  await db.query(sql);
+  console.log("[DB] ✅ Tables ready");
 }
+
+async function loadFromDB() {
+  try {
+    // Long-term memory
+    const mem = await db.query("SELECT id, text, added_by, created_at FROM memory ORDER BY id");
+    longTermMemory = mem.rows.map(r => ({ text: r.text, addedBy: r.added_by, date: r.created_at.toISOString(), dbId: r.id }));
+    console.log(`[DB] Loaded ${longTermMemory.length} memories`);
+
+    // Recent events (last 250)
+    const evts = await db.query(
+      "SELECT tribe, map, event_type, event_text, day_time, created_at FROM tribe_events ORDER BY created_at DESC LIMIT 250"
+    );
+    recentEvents = evts.rows.reverse().map(r => ({
+      type:      r.event_type,
+      label:     r.event_type,
+      tribe:     r.tribe,
+      map:       r.map,
+      dayTime:   r.day_time,
+      text:      r.event_text,
+      at:        r.created_at.toISOString(),
+    }));
+    console.log(`[DB] Loaded ${recentEvents.length} recent events`);
+
+    // Tribe roster
+    const tribes = await db.query("SELECT name, maps, last_seen, event_count FROM tribes");
+    tribesSeen = {};
+    for (const r of tribes.rows) {
+      tribesSeen[r.name] = {
+        maps:      r.maps ? r.maps.split(",").filter(Boolean) : [],
+        lastSeen:  r.last_seen.toISOString(),
+        count:     r.event_count,
+      };
+    }
+    console.log(`[DB] Loaded ${tribes.rowCount} tribes`);
+
+    // Mod records — warns
+    const warns = await db.query("SELECT player_id, reason, admin, server, created_at FROM mod_records WHERE type='warn' ORDER BY created_at");
+    for (const r of warns.rows) {
+      if (!warnRecords.has(r.player_id)) warnRecords.set(r.player_id, []);
+      warnRecords.get(r.player_id).push({ reason: r.reason, admin: r.admin, server: r.server, date: r.created_at.toISOString() });
+    }
+    // Mod records — bans (most recent ban per player wins)
+    const bans = await db.query("SELECT player_id, reason, admin, server, duration, created_at FROM mod_records WHERE type='ban' ORDER BY created_at");
+    for (const r of bans.rows) {
+      banRecords.set(r.player_id, { reason: r.reason, admin: r.admin, server: r.server, duration: r.duration, date: r.created_at.toISOString() });
+    }
+    console.log(`[DB] Loaded ${warnRecords.size} warned players, ${banRecords.size} banned players`);
+
+    // Ticket counter
+    const tc = await db.query("SELECT value FROM bot_state WHERE key = 'ticket_counter'");
+    if (tc.rowCount > 0) ticketCounter = parseInt(tc.rows[0].value, 10) || 0;
+    console.log(`[DB] Ticket counter: ${ticketCounter}`);
+
+  } catch (err) {
+    console.error("[DB] Load error:", err.message);
+  }
+}
+
+// ── DB write helpers (all wrapped in try/catch) ───────────────
+
+async function dbSaveMemory(text, addedBy) {
+  if (!db) return null;
+  try {
+    const r = await db.query("INSERT INTO memory (text, added_by) VALUES ($1, $2) RETURNING id", [text, addedBy]);
+    return r.rows[0].id;
+  } catch (err) { console.error("[DB] saveMemory:", err.message); return null; }
+}
+
+async function dbDeleteMemory(dbId) {
+  if (!db || !dbId) return;
+  try { await db.query("DELETE FROM memory WHERE id = $1", [dbId]); }
+  catch (err) { console.error("[DB] deleteMemory:", err.message); }
+}
+
+async function dbSaveEvent(tribe, map, eventType, eventText, dayTime) {
+  if (!db) return;
+  try {
+    await db.query(
+      "INSERT INTO tribe_events (tribe, map, event_type, event_text, day_time) VALUES ($1,$2,$3,$4,$5)",
+      [tribe, map, eventType, eventText, dayTime]
+    );
+  } catch (err) { console.error("[DB] saveEvent:", err.message); }
+}
+
+async function dbUpsertTribe(name, mapsArray, lastSeen) {
+  if (!db) return;
+  try {
+    await db.query(`
+      INSERT INTO tribes (name, maps, last_seen, event_count)
+      VALUES ($1, $2, $3, 1)
+      ON CONFLICT (name) DO UPDATE SET
+        maps        = CASE WHEN tribes.maps = '' THEN EXCLUDED.maps
+                          ELSE (
+                            SELECT STRING_AGG(DISTINCT m, ',') FROM (
+                              SELECT UNNEST(STRING_TO_ARRAY(tribes.maps, ',')) AS m
+                              UNION
+                              SELECT UNNEST(STRING_TO_ARRAY(EXCLUDED.maps, ','))
+                            ) sub
+                          ) END,
+        last_seen   = EXCLUDED.last_seen,
+        event_count = tribes.event_count + 1
+    `, [name, mapsArray.join(","), lastSeen]);
+  } catch (err) { console.error("[DB] upsertTribe:", err.message); }
+}
+
+async function dbSaveModRecord(playerId, type, reason, admin, server, duration = "N/A") {
+  if (!db) return;
+  try {
+    await db.query(
+      "INSERT INTO mod_records (player_id, type, reason, admin, server, duration) VALUES ($1,$2,$3,$4,$5,$6)",
+      [playerId, type, reason, admin, server, duration]
+    );
+  } catch (err) { console.error("[DB] saveModRecord:", err.message); }
+}
+
+async function dbDeleteBan(playerId) {
+  if (!db) return;
+  try {
+    // Mark as unbanned by inserting an 'unban' record (preserves history)
+    await db.query(
+      "INSERT INTO mod_records (player_id, type, reason, admin, server) VALUES ($1,'unban','Unbanned','system','N/A')",
+      [playerId]
+    );
+    // Delete active ban records
+    await db.query("DELETE FROM mod_records WHERE player_id = $1 AND type = 'ban'", [playerId]);
+  } catch (err) { console.error("[DB] deleteBan:", err.message); }
+}
+
+async function dbSaveTicketCounter() {
+  if (!db) return;
+  try {
+    await db.query(
+      "INSERT INTO bot_state (key, value) VALUES ('ticket_counter', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+      [String(ticketCounter)]
+    );
+  } catch (err) { console.error("[DB] saveTicketCounter:", err.message); }
+}
+
+// saveData() stub — kept so existing call sites don't break, but is now a no-op
+// (all writes go directly to DB at the point of change)
+function saveData() {}
+function loadData() {}
 
 // ── System prompt builders ────────────────────────────────────
 function memoryForPrompt() {
@@ -692,7 +880,7 @@ async function postCommandsList(guild) {
           { name: "🤖  AI", value: "`!ai on/off` — toggle in any channel\n`!ai help` — capabilities\n**#🤖︱ai** always on" },
           { name: "🗺️  Servers", value: SERVERS.map(s => `\`${s.name}\``).join(", ") },
         )
-        .setFooter({ text: "Helena Walker — Skii's Lodge v2.9.1  •  All actions logged" })
+        .setFooter({ text: "Helena Walker — Skii's Lodge v2.10.0  •  All actions logged" })
         .setTimestamp(),
     ],
   });
@@ -752,7 +940,7 @@ async function createTicket(interaction) {
     topic: `Ticket #${ticketNum} — opened by ${displayName(member)}`,
   });
   openTickets.set(ticketCh.id, { userId: member.id, ticketNum });
-  saveData();
+  await dbSaveTicketCounter();
 
   await ticketCh.send({
     content: `<@${member.id}>`,
@@ -801,7 +989,6 @@ async function closeTicket(interaction) {
   }
   await interaction.reply({ content: `🔒 Ticket #${ticketNum} closed. Transcript saved.` });
   openTickets.delete(ch.id);
-  saveData();
   try {
     if (info) await ch.permissionOverwrites.delete(info.userId).catch(() => {});
     await ch.setName(`🔒︱closed-${ticketNum}`);
@@ -1028,6 +1215,8 @@ function recordTribeEntry(tribe, map) {
   if (map && !t.maps.includes(map)) t.maps.push(map);
   t.lastSeen = new Date().toISOString();
   t.count   += 1;
+  // Persist asynchronously
+  dbUpsertTribe(tribe, t.maps, t.lastSeen).catch(() => {});
 }
 
 function recordEventEntry(rule, tribe, map, dayTime, event, channelId) {
@@ -1043,7 +1232,8 @@ function recordEventEntry(rule, tribe, map, dayTime, event, channelId) {
   };
   recentEvents.push(entry);
   if (recentEvents.length > RECENT_EVENTS_MAX) recentEvents.splice(0, recentEvents.length - RECENT_EVENTS_MAX);
-  saveData();
+  // Persist to DB asynchronously — don't await to keep the message handler fast
+  dbSaveEvent(entry.tribe, entry.map, rule.key, event.slice(0, 1000), dayTime || '').catch(() => {});
 }
 
 async function pingAdmins(message, rule, tribe, map, dayTime, event) {
@@ -1151,8 +1341,10 @@ async function handleWarn(interaction) {
   const player = interaction.options.getString("player");
   const server = interaction.options.getString("server");
   const reason = interaction.options.getString("reason");
+  const warnAdmin = displayName(interaction.member);
   if (!warnRecords.has(player)) warnRecords.set(player, []);
-  warnRecords.get(player).push({ reason, admin: displayName(interaction.member), server, date: new Date().toISOString() });
+  warnRecords.get(player).push({ reason, admin: warnAdmin, server, date: new Date().toISOString() });
+  await dbSaveModRecord(player, 'warn', reason, warnAdmin, server);
   saveData();
   const r = await sendRcon(server, `Broadcast WARNING issued to ${player}: ${reason}`);
   await interaction.editReply({ content: `⚠️ Warning issued to **${player}**. RCON: ${r.success ? "✅" : `❌ ${r.error}`}`, ephemeral: true });
@@ -1180,7 +1372,9 @@ async function handleBan(interaction) {
   const server   = interaction.options.getString("server");
   const reason   = interaction.options.getString("reason");
   const duration = interaction.options.getString("duration") ?? "Permanent";
-  banRecords.set(player, { reason, admin: displayName(interaction.member), server, duration, date: new Date().toISOString() });
+  const banAdmin = displayName(interaction.member);
+  banRecords.set(player, { reason, admin: banAdmin, server, duration, date: new Date().toISOString() });
+  await dbSaveModRecord(player, 'ban', reason, banAdmin, server, duration);
   saveData();
   const results = await sendRconMany(server, `BanPlayer ${player}`);
   await interaction.editReply({ content: `🔨 Ban:\n${rconSummary(results)}`, ephemeral: true });
@@ -1193,7 +1387,8 @@ async function handleBan(interaction) {
 async function handleUnban(interaction) {
   const player = interaction.options.getString("player");
   const server = interaction.options.getString("server");
-  banRecords.delete(player); saveData();
+  banRecords.delete(player);
+  await dbDeleteBan(player);
   const results = await sendRconMany(server, `UnbanPlayer ${player}`);
   await interaction.editReply({ content: `✅ Unban:\n${rconSummary(results)}`, ephemeral: true });
   await logPlayerAction(interaction.guild, 0x00cc44, "✅ Player Unbanned", [
@@ -1256,7 +1451,7 @@ async function handleForget(interaction) {
   const num = interaction.options.getInteger("number");
   if (num < 1 || num > longTermMemory.length) return interaction.editReply({ content: `❌ No memory #${num}.`, ephemeral: true });
   const [removed] = longTermMemory.splice(num - 1, 1);
-  saveData();
+  await dbDeleteMemory(removed.dbId);
   await interaction.editReply({ content: `🗑️ Forgot: *"${removed.text}"*`, ephemeral: true });
 }
 
@@ -1407,7 +1602,7 @@ async function handleHelp(interaction) {
           : "Commands marked *(admin only)* are reserved for staff. **`/rates`**, **`/tribes`**, **`/activity`**, **`/help`**, and the AI chat in **#🤖︱ai** are open to everyone!",
       }
     )
-    .setFooter({ text: "Helena Walker — Skii's Lodge v2.9.1  •  Naturalist AI & Cluster Manager" })
+    .setFooter({ text: "Helena Walker — Skii's Lodge v2.10.0  •  Naturalist AI & Cluster Manager" })
     .setTimestamp();
 
   await interaction.reply({ ephemeral: true, embeds: [embed] });
@@ -1427,7 +1622,7 @@ async function postOnlineMessage(guild) {
           `📋 **Tribe Watcher:** ✅ Monitoring Tribe Data Logs category\n` +
           `🕐 **Started:** <t:${Math.floor(Date.now() / 1000)}:F>`
         )
-        .setFooter({ text: "Helena Walker — Skii's Lodge v2.9.1" })],
+        .setFooter({ text: "Helena Walker — Skii's Lodge v2.10.0" })],
     }).catch(() => {});
     console.log(`✅ Online message → ${name}`);
   }
@@ -1436,7 +1631,7 @@ async function postOnlineMessage(guild) {
 // ── READY ─────────────────────────────────────────────────────
 client.once("ready", async () => {
   console.log(`✅ Helena is online as ${client.user.tag}`);
-  loadData();
+  await initDB();
   const guild = client.guilds.cache.get(GUILD_ID);
   if (!guild) { console.error("❌ Guild not found."); process.exit(1); }
 
@@ -1452,7 +1647,7 @@ client.once("ready", async () => {
   await postOnlineMessage(guild);
 
   setInterval(async () => { await fetchRates(); await fetchTribes(); await pollServers(); }, UPDATE_INTERVAL_MINUTES * 60 * 1000);
-  console.log("✅ Helena v2.9.1 setup complete!");
+  console.log("✅ Helena v2.10.0 setup complete!");
 });
 
 // ── INTERACTIONS ──────────────────────────────────────────────
